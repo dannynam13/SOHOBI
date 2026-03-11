@@ -86,3 +86,33 @@
 
 - Azure 테넌트: `soldeskms.onmicrosoft.com`
 - 협업 도구: Slack (`mssay2-2.slack.com`), GitHub, Trello
+
+---
+
+## 팀원별 작업 폴더 규칙
+
+### 폴더 구조
+
+```
+SOHOBI/
+├── <성>/
+│   └── Code_<이니셜>/
+│       ├── requirements.txt  ← 필수: Python 3.12 기준, 버전 고정
+│       └── ...
+```
+
+예: `CHOI/Code_CJY/`, `KIM/Code_KAB/`
+
+### requirements.txt 작성 원칙
+
+- Python 3.12 기준으로 검증
+- 버전은 `==` 으로 고정 (재현성 보장)
+- 직접 의존성과 주요 전이 의존성을 함께 명시
+
+### 환경 설정
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
