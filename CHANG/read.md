@@ -12,6 +12,7 @@
 /skills/investment-simulation.yaml
 
 
+
   개인-콘솔 작업중에는 api키를 하드코딩
   
   업로드 파일엔 일단 OPENAI_API_KEY 로 대체해두었다.
@@ -19,9 +20,12 @@
   대체하는김에 주석파트를 살짝 정리
 
 
+
 - 결과 히스토그램의 경우 현재는 따로 구동중 ( 대화-plugin함수의 함수와 다른 파일에 작업된 상태 )
   
 /graph/graph.ipynb
+
+
 
 #  팀원과의 구동환경-버전에 차이 존재
 
