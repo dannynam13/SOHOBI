@@ -1,4 +1,5 @@
 {
+  "python.defaultInterpreterPath": "${workspaceFolder}/integrated_PARK/.venv/bin/python",
   "files.exclude": {
     "**/.venv": true,
     "**/venv": true,
