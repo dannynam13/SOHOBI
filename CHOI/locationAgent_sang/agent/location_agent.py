@@ -169,3 +169,105 @@ class LocationAgent:
             result += str(msg.content)
 
         return result
+
+    async def compare(
+        self, locations: list, business_type: str, quarter: str = "20244"
+    ) -> dict:
+        """복수 지역 비교 분석"""
+        supported_industries = self.repo.get_supported_industries()
+        if business_type not in supported_industries:
+            return {"error": "업종 미지원", "business_type": business_type}
+
+        year = quarter[:4]
+        q    = quarter[4]
+
+        # 지역별 데이터 수집
+        location_data = []
+        for loc in locations:
+            sales = self.repo.get_sales(loc, business_type, quarter)
+            store = self.repo.get_store_count(loc, business_type, quarter)
+            if not sales and not store:
+                continue
+
+            ss = sales.get("summary", {}) if sales else {}
+            st = store.get("summary", {}) if store else {}
+
+            monthly  = ss.get("monthly_sales_krw", 0)
+            cnt      = st.get("store_count", 0)
+            avg      = int(monthly / cnt) if cnt > 0 else 0
+
+            location_data.append({
+                "location":              loc,
+                "monthly_sales_krw":     monthly,
+                "store_count":           cnt,
+                "avg_sales_per_store_krw": avg,
+                "weekday_pct":           round(ss.get("weekday_sales_krw", 0) / monthly * 100) if monthly else 0,
+                "weekend_pct":           round(ss.get("weekend_sales_krw", 0) / monthly * 100) if monthly else 0,
+                "open_rate_pct":         st.get("open_rate_pct", 0),
+                "close_rate_pct":        st.get("close_rate_pct", 0),
+                "male_pct":              round(ss.get("male_sales_krw", 0) / monthly * 100) if monthly else 0,
+                "female_pct":            round(ss.get("female_sales_krw", 0) / monthly * 100) if monthly else 0,
+            })
+
+        if not location_data:
+            return {"error": "데이터 없음"}
+
+        comparison = await self._run_compare_agent(location_data, business_type, year, q)
+
+        return {
+            "locations":     locations,
+            "business_type": business_type,
+            "quarter":       quarter,
+            "data":          location_data,
+            "comparison":    comparison,
+        }
+
+    async def _run_compare_agent(
+        self, location_data: list, business_type: str, year: str, q: str
+    ) -> str:
+        kernel   = _make_kernel()
+        settings = AzureChatPromptExecutionSettings()
+
+        agent = ChatCompletionAgent(
+            name="LocationCompareAgent",
+            instructions=(
+                "You are a Seoul F&B startup commercial area comparison expert.\n\n"
+                "## Response Format (strictly follow this format)\n\n"
+                f"📅 데이터 기준: {year}년 {q}분기 / 업종: {business_type}\n\n"
+                "📊 지역별 비교표\n\n"
+                "| 항목 | 지역A | 지역B | ... |\n"
+                "|------|-------|-------|\n"
+                "| 월매출 | XXX억원 | XXX억원 |\n"
+                "| 점포수 | XX개 | XX개 |\n"
+                "| 점포당 평균매출 | XXX만원 | XXX만원 |\n"
+                "| 주중/주말 | XX%/XX% | XX%/XX% |\n"
+                "| 개업률 | X% | X% |\n"
+                "| 폐업률 | X% | X% |\n"
+                "| 주요 성별 | 남/여 XX%/XX% | 남/여 XX%/XX% |\n\n"
+                "✅ 창업 추천 순위\n"
+                "- **1순위: XXX** - 추천 이유 1~2줄\n"
+                "- **2순위: XXX** - 추천 이유 1~2줄\n\n"
+                "⚠️ 유의사항\n"
+                "- 각 지역별 리스크 1줄씩\n\n"
+                "## Rules\n"
+                "- Convert sales to 억/만원 unit\n"
+                "- Only use data explicitly provided\n"
+                "- Never use numbering (1. 2. 3.) outside the ranking section\n"
+                "- Do not add closing summary after 유의사항\n"
+                "- Always respond in Korean"
+            ),
+            kernel=kernel,
+            arguments=KernelArguments(settings=settings),
+        )
+
+        prompt = (
+            f"업종: {business_type} / 분기: {year}년 {q}분기\n\n"
+            f"[지역별 데이터]\n{json.dumps(location_data, ensure_ascii=False, indent=2)}"
+        )
+
+        thread = ChatHistoryAgentThread()
+        result = ""
+        async for msg in agent.invoke(messages=prompt, thread=thread):
+            result += str(msg.content)
+
+        return result

@@ -71,6 +71,17 @@ async def test_single(location: str, business_type: str, quarter: str = "20244")
 
 async def main():
 
+    async def test_compare(locations, business_type, quarter="20244"):
+        print(f"\n{'='*55}")
+        print(f"비교: {' vs '.join(locations)} / {business_type} / {quarter}")
+        print(f"{'='*55}")
+        agent = LocationAgent()
+        result = await agent.compare(locations, business_type, quarter)
+        if "error" in result:
+            print(f"❌ {result['error']}")
+            return
+        print(result.get("comparison", ""))
+
     # 정상 케이스
     await test_single("홍대", "카페")
     # await test_single("강남", "한식")
@@ -79,6 +90,9 @@ async def main():
     # 미지원 지역 (에러 처리 확인)
     # await test_single("부산", "카페")
     # await test_single("홍대", "피자")  # 미지원 업종
+
+    # 비교 케이스
+    await test_compare(["홍대", "강남", "잠실"], "카페")
 
 
 if __name__ == "__main__":
