@@ -19,7 +19,7 @@ class FinanceSimulationPlugin:
         description=(
             "월매출, 원가, 급여, 임대료, 관리비, 수수료, 세율을 입력받아 "
             "10,000회 몬테카를로 시뮬레이션으로 평균 순이익과 손실 확률을 계산합니다. "
-            "revenue는 [단일값] 또는 [최소값, 최대값, ...] 형태의 숫자 목록(원 단위)입니다."
+            "revenue는 [단일값] 또는 [임의의 복수 값] 형태의 숫자 목록(원 단위)입니다."
         ),
     )
     def monte_carlo_simulation(
@@ -31,7 +31,6 @@ class FinanceSimulationPlugin:
         rent: float = 0,
         admin: float = 0,
         fee: float = 0,
-        tax_rate: float = 0.2,
     ) -> dict:
         iterations = 10_000
         results = []
@@ -41,27 +40,23 @@ class FinanceSimulationPlugin:
             for _ in range(iterations):
                 sim_rev = random.gauss(revenue[0], revenue[0] * 0.1)
                 sim_cost = random.gauss(cost, cost * 0.1)
-                net = (sim_rev - sim_cost - salary_cost - rent - admin - fee) * (1 - tax_rate)
+                net = (sim_rev - sim_cost - salary_cost - rent - admin - fee)
                 results.append(net)
         else:
             for _ in range(iterations):
                 sim_rev = random.choice(revenue)
                 sim_cost = random.gauss(cost, cost * 0.1)
-                net = (sim_rev - sim_cost - salary_cost - rent - admin - fee) * (1 - tax_rate)
+                net = (sim_rev - sim_cost - salary_cost - rent - admin - fee)
                 results.append(net)
 
         avg = sum(results) / iterations
         loss_prob = sum(1 for r in results if r < 0) / iterations
         sorted_results = sorted(results)
-        std = math.sqrt(sum((r - avg) ** 2 for r in results) / iterations)
         p5  = sorted_results[int(iterations * 0.05)]
-        p95 = sorted_results[int(iterations * 0.95)]
         return {
             "average_net_profit": round(avg),
             "loss_probability":   round(loss_prob, 4),
-            "std_profit":         round(std),
             "p5_net_profit":      round(p5),
-            "p95_net_profit":     round(p95),
         }
 
     @kernel_function(
@@ -76,3 +71,32 @@ class FinanceSimulationPlugin:
             return {"recoverable": False, "months": None}
         months = math.ceil(initial_investment / avg_profit)
         return {"recoverable": True, "months": months}
+
+    # 누적 정보 반영을 위한 JSON 상태 관리용 함수 2종 추가
+    def load_defaults(self) -> dict:
+        """
+        모든 변수에 평균치 또는 None 기본값을 부여한 초기 JSON 반환
+        """
+        return {
+            ""
+            "revenue": 17000000,
+            "cost": 6120000,
+            "salary": 3400000,
+            "hours": None,
+            "rent": 2550000,
+            "admin": 510000,
+            "fee": 510000,
+            "initial_investment": None
+        }
+    # 카페-평균치 기준 기본값, 해당 값을 DB 등을 불러오는 형태로 추후 업데이트 상정 중
+
+    def merge_json(self, previous: dict, current: dict) -> dict:
+        """
+        기존 JSON(previous)에 새 입력(current)을 병합.
+        current에 값이 있으면 덮어쓰고, 없으면 previous 유지.
+        """
+        merged = previous.copy()
+        for key, value in current.items():
+            if value is not None:
+                merged[key] = value
+        return merged

@@ -39,10 +39,9 @@ _PARAM_EXTRACT_PROMPT = """사용자가 다음과 같은 질문을 했습니다:
 - cost: 예상 월 원가 (숫자, 원 단위)
 - salary: 직원 급여 (숫자, 원 단위, 고정급 또는 시급)
 - hours: 월 근무시간 (시급일 경우만, 없으면 생략)
-- rent: 임대료 (원 단위, 없으면 0)
-- admin: 관리비 (원 단위, 없으면 0)
-- fee: 수수료 (원 단위, 없으면 0)
-- tax_rate: 세율 (기본값 0.2)
+- rent: 임대료 (원 단위)
+- admin: 관리비 (원 단위)
+- fee: 수수료 (원 단위)
 - initial_investment: 초기 투자비용 (원 단위, 언급 없으면 생략)
 
 출력은 JSON 형식으로만 하세요."""
@@ -54,13 +53,11 @@ _EXPLAIN_PROMPT = """다음은 창업 재무 시뮬레이션 결과입니다.
 
 [시뮬레이션 결과 — 10,000회 몬테카를로]
 - 평균 월 순이익: {avg_profit:,}원
-- 표준편차: {std_profit:,}원
-- 90% 신뢰구간: {p5:,}원 ~ {p95:,}원  (하위 5% ~ 상위 95%)
 - 손실 발생 관측 여부: {loss_prob}
+- 극단적 손실 금액: ~ {p5:,}원 (~하위 5%)
 
 위 결과를 바탕으로 사업 가능성을 설명하세요.
 - 응답 첫 단락에 위의 가정 조건(월매출, 원가, 급여 등)을 명시하세요.
-- 신뢰구간과 표준편차를 언급하여 예측의 불확실성을 구체적으로 설명하세요.
 - 위험 요인과 기회 요인을 함께 언급하세요.
 - 낙관·기본·비관 시나리오와 리스크 경고를 포함하세요.
 - 손실 발생 확률이 낮더라도 실제 사업에서는 시뮬레이션 범위 밖의 리스크(예: 경기 침체, 예상 외 비용 급증)가 존재함을 반드시 언급하세요.
@@ -99,6 +96,8 @@ class FinanceAgent:
     def __init__(self, kernel: Kernel):
         self._kernel = kernel
         self._sim = FinanceSimulationPlugin()
+        # 최초 초기화 시 기본값 로딩
+        self._state = self._sim.load_defaults()
 
     async def _call_llm(self, prompt: str, _retry: bool = False) -> str:
         service: AzureChatCompletion = self._kernel.get_service("sign_off")
@@ -120,15 +119,16 @@ class FinanceAgent:
             ) from e
 
     async def _extract_params(self, question: str, profile: str = "") -> dict:
-        """자연어 질문 → 시뮬레이션 파라미터 JSON 추출."""
-        context = (_PROFILE_CONTEXT.format(profile=profile) if profile else "")
-        raw = await self._call_llm(context + _PARAM_EXTRACT_PROMPT.format(user_input=question))
+        raw = await self._call_llm(_PARAM_EXTRACT_PROMPT.format(user_input=question))
         clean = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
         try:
-            return json.loads(clean)
+            current = json.loads(clean)
         except json.JSONDecodeError:
-            # 파싱 실패 시 최소한의 기본값 반환
-            return {"revenue": [5_000_000], "cost": 2_000_000, "salary": 2_000_000, "tax_rate": 0.2}
+            current = {}
+
+        # 누적 반영: 이전 상태(self._state)에 새 입력(current)을 병합
+        self._state = self._sim.merge_json(self._state, current)
+        return self._state
 
     @kernel_function(name="generate_draft", description="재무 시뮬레이션 기반 draft 생성")
     async def generate_draft(self, question: str, retry_prompt: str = "", profile: str = "") -> str:
@@ -152,14 +152,13 @@ class FinanceAgent:
         rev = variables.get("revenue", [])
         rev_str = f"{rev[0]:,}원" if len(rev) == 1 else f"{min(rev):,}~{max(rev):,}원 (복수 시나리오)"
         assumption_lines = [
-            f"- 월매출: {rev_str} (±10% 정규분포 가정)",
-            f"- 원가: {variables.get('cost', 0):,}원 (±10% 정규분포 가정)",
+            f"- 월매출: {rev_str}",
+            f"- 원가: {variables.get('cost', 0):,}원",
             f"- 급여: {variables.get('salary', 0):,}원",
         ]
         if variables.get("rent"): assumption_lines.append(f"- 임대료: {variables['rent']:,}원")
         if variables.get("admin"): assumption_lines.append(f"- 관리비: {variables['admin']:,}원")
         if variables.get("fee"):   assumption_lines.append(f"- 수수료: {variables['fee']:,}원")
-        assumption_lines.append(f"- 세율: {variables.get('tax_rate', 0.2):.0%}")
         assumptions = "\n".join(assumption_lines)
 
         # 손실확률: 0%이면 수치 자체를 제거하고 서술형으로만 전달
@@ -177,9 +176,7 @@ class FinanceAgent:
         explain_prompt = _EXPLAIN_PROMPT.format(
             assumptions=assumptions,
             avg_profit=sim_result["average_net_profit"],
-            std_profit=sim_result["std_profit"],
             p5=sim_result["p5_net_profit"],
-            p95=sim_result["p95_net_profit"],
             loss_prob=loss_prob_str,
             question=question,
         )
