@@ -12,10 +12,13 @@ PW: 1
 ⓐ 소상공인_서울: 
 	- 반경 시장 관련 테이블
 	- 경기, 강원등 도별 테이블 분할되어 있음
+	- "MS2_PROJECT_VWORLD_MAP.sql"로 컬럼명 참고
 ⓑ STG_LAW_ADM: 
 	- 행정동&법정동 매칭 테이블
+    - "MS2_PROJECT_Create_dong.sql"로 컴럼명 참고
 ⓒ SANGKWON_SALES:
 	- 상권 매출 관련 테이블
-	- 현재 이슈가 있어 삭제 후 동일한 테이블명으로 재업데이트 예정
+	- "MS2_PROJECT_VWORLD_SangKwon.sql"로 컬럼명 참고
 ⓓ REALTIME_FLPOP:
 	- 유동인구 관련 테이블
+    - 미진행 中
