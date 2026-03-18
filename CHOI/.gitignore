@@ -13,7 +13,6 @@ __pycache__/
 
 # 환경 변수
 .env
-.env
 **/.env
 # 생성된 PDF
 *.pdf
