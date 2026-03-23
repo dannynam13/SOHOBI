@@ -18,10 +18,10 @@ def get_kernel() -> sk.Kernel:
     kernel.add_service(
         AzureChatCompletion(
             service_id="sign_off",
-            deployment_name=os.getenv("AZURE_SIGNOFF_DEPLOYMENT"),
-            endpoint=os.getenv("AZURE_SIGNOFF_ENDPOINT"),
-            ad_token_provider=_TOKEN_PROVIDER,
-            api_version="2024-12-01-preview",
+            deployment_name=os.getenv("AZURE_DEPLOYMENT_NAME"),
+            endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+            api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+            api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
         )
     )
     return kernel
