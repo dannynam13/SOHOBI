@@ -51,12 +51,12 @@ async def run_signoff(client: openai.AsyncAzureOpenAI, domain: str, draft: str, 
     messages = _build_messages(domain, draft)
 
     for attempt in range(max_retries + 1):
-        response = await client.responses.create(
+        response = await client.chat.completions.create(
             model=deployment,
-            input=messages,
-            text={"format": {"type": "json_object"}},
+            messages=messages,
+            response_format={"type": "json_object"},
         )
-        result_text = response.output_text
+        result_text = response.choices[0].message.content
         verdict = json.loads(result_text)
 
         passed_set   = set(verdict.get("passed", []))
