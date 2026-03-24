@@ -15,12 +15,14 @@ _TOKEN_PROVIDER = get_bearer_token_provider(
 
 def get_kernel() -> sk.Kernel:
     kernel = sk.Kernel()
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
     kernel.add_service(
         AzureChatCompletion(
             service_id="sign_off",
             deployment_name=os.getenv("AZURE_DEPLOYMENT_NAME"),
             endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-            ad_token_provider=_TOKEN_PROVIDER,
+            api_key=api_key if api_key else None,
+            ad_token_provider=None if api_key else _TOKEN_PROVIDER,
             api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
         )
     )
