@@ -91,6 +91,7 @@ async def _extract_params(question: str) -> dict:
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
+    adm_cd: str | None = None  # 지도에서 선택한 행정동 코드 (직접 DB 조회용)
 
 
 # ── 엔드포인트 ─────────────────────────────────────────────
@@ -119,6 +120,38 @@ async def chat(req: ChatRequest):
     locations = params["locations"]
     business_type = params["business_type"]
     quarter = params["quarter"]
+
+    # adm_cd가 있으면 AREA_MAP을 우회하여 직접 행정동 코드로 조회
+    # 지도에서 행정동을 클릭 → AI 버튼으로 넘어온 경우
+    if req.adm_cd and business_type:
+        from db.repository import AREA_MAP
+        # 임시 키로 AREA_MAP에 등록하여 기존 에이전트 로직 재활용
+        temp_key = f"__adm_{req.adm_cd}"
+        AREA_MAP[temp_key] = [req.adm_cd]
+        try:
+            result = await _agent.analyze(temp_key, business_type, quarter)
+
+            if "error" in result:
+                return {
+                    "session_id": session_id,
+                    "type": "error",
+                    "analysis": result.get("error", "오류가 발생했습니다."),
+                    "location": locations[0] if locations else req.adm_cd,
+                    "business_type": business_type,
+                }
+
+            return {
+                "session_id": session_id,
+                "type": "analyze",
+                "analysis": result.get("analysis", ""),
+                "similar_locations": result.get("similar_locations", []),
+                "location": locations[0] if locations else req.adm_cd,
+                "business_type": business_type,
+                "quarter": quarter,
+            }
+        finally:
+            # 임시 키 정리
+            AREA_MAP.pop(temp_key, None)
 
     if not locations or not business_type:
         return {
