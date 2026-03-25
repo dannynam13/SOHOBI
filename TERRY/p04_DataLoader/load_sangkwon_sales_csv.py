@@ -1,37 +1,88 @@
 # =====================================================
-# 골목상권 CSV → Oracle SANGKWON_SALES 자동 적재
-# 실행: python load_sangkwon_csv.py
-# CSV 폴더 안의 모든 .csv 파일을 순서대로 INSERT
+# 골목상권 매출 CSV → Oracle SANGKWON_SALES INSERT
+# 실행: python load_sangkwon_sales_csv.py [폴더경로] [옵션]
+#
+# 사용법:
+#   python load_sangkwon_sales_csv.py                          ← 전체
+#   python load_sangkwon_sales_csv.py csv/sangkwon_sales       ← 폴더 지정
+#   python load_sangkwon_sales_csv.py --year=2024              ← 2024년 파일만
+#   python load_sangkwon_sales_csv.py --year=2024 --qtr=3      ← 2024년 3분기만
+#
+# CSV 컬럼 (collect_sangkwon_sales.py 수집 결과 - 영문):
+#   STDR_YYQU_CD, ADSTRD_CD, ADSTRD_CD_NM, SVC_INDUTY_CD, ...
 # =====================================================
 
 import os
+import sys
 import glob
 import csv
-import oracledb
 import logging
+import oracledb
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-# ── 설정 ──────────────────────────────────────────
 DB_INFO = "shobi/8680@//10.1.92.119:1521/xe"
-# ── CSV 폴더 경로 ──────────────────────────────────
-# 연도별 폴더 지정: csv/sangkwon_sales/sangkwon_2024_utf8 등
-import sys
+BATCH = 1000
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-CSV_DIR = (
-    sys.argv[1]
-    if len(sys.argv) > 1
-    else os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "csv", "sangkwon_sales"
-    )
-)
-ENCODING = "utf-8-sig"  # BOM 있는 경우 자동 처리
-BATCH = 1000  # 한 번에 INSERT할 행 수
-# ──────────────────────────────────────────────────
-
-# CSV 헤더 → DB 컬럼명 매핑 (53개)
+# ── API 영문 컬럼 → DB 컬럼 매핑 ─────────────────────────────
 COL_MAP = {
+    # 영문 (collect_sangkwon_sales.py 결과)
+    "STDR_YYQU_CD": "base_yr_qtr_cd",
+    "ADSTRD_CD": "adm_cd",
+    "ADSTRD_CD_NM": "adm_nm",
+    "SVC_INDUTY_CD": "svc_induty_cd",
+    "SVC_INDUTY_CD_NM": "svc_induty_nm",
+    "THSMON_SELNG_AMT": "tot_sales_amt",
+    "THSMON_SELNG_CO": "tot_selng_co",
+    "MDWK_SELNG_AMT": "mdwk_sales_amt",
+    "WKEND_SELNG_AMT": "wkend_sales_amt",
+    "MON_SELNG_AMT": "mon_sales_amt",
+    "TUES_SELNG_AMT": "tue_sales_amt",
+    "WED_SELNG_AMT": "wed_sales_amt",
+    "THUR_SELNG_AMT": "thu_sales_amt",
+    "FRI_SELNG_AMT": "fri_sales_amt",
+    "SAT_SELNG_AMT": "sat_sales_amt",
+    "SUN_SELNG_AMT": "sun_sales_amt",
+    "TM00_06_SELNG_AMT": "tm00_06_sales_amt",
+    "TM06_11_SELNG_AMT": "tm06_11_sales_amt",
+    "TM11_14_SELNG_AMT": "tm11_14_sales_amt",
+    "TM14_17_SELNG_AMT": "tm14_17_sales_amt",
+    "TM17_21_SELNG_AMT": "tm17_21_sales_amt",
+    "TM21_24_SELNG_AMT": "tm21_24_sales_amt",
+    "ML_SELNG_AMT": "ml_sales_amt",
+    "FML_SELNG_AMT": "fml_sales_amt",
+    "AGRDE_10_SELNG_AMT": "age10_amt",
+    "AGRDE_20_SELNG_AMT": "age20_amt",
+    "AGRDE_30_SELNG_AMT": "age30_amt",
+    "AGRDE_40_SELNG_AMT": "age40_amt",
+    "AGRDE_50_SELNG_AMT": "age50_amt",
+    "AGRDE_60_ABOVE_SELNG_AMT": "age60_amt",
+    "MDWK_SELNG_CO": "mdwk_selng_co",
+    "WKEND_SELNG_CO": "wkend_selng_co",
+    "MON_SELNG_CO": "mon_selng_co",
+    "TUES_SELNG_CO": "tue_selng_co",
+    "WED_SELNG_CO": "wed_selng_co",
+    "THUR_SELNG_CO": "thu_selng_co",
+    "FRI_SELNG_CO": "fri_selng_co",
+    "SAT_SELNG_CO": "sat_selng_co",
+    "SUN_SELNG_CO": "sun_selng_co",
+    "TM00_06_SELNG_CO": "tm00_06_selng_co",
+    "TM06_11_SELNG_CO": "tm06_11_selng_co",
+    "TM11_14_SELNG_CO": "tm11_14_selng_co",
+    "TM14_17_SELNG_CO": "tm14_17_selng_co",
+    "TM17_21_SELNG_CO": "tm17_21_selng_co",
+    "TM21_24_SELNG_CO": "tm21_24_selng_co",
+    "ML_SELNG_CO": "ml_selng_co",
+    "FML_SELNG_CO": "fml_selng_co",
+    "AGRDE_10_SELNG_CO": "age10_selng_co",
+    "AGRDE_20_SELNG_CO": "age20_selng_co",
+    "AGRDE_30_SELNG_CO": "age30_selng_co",
+    "AGRDE_40_SELNG_CO": "age40_selng_co",
+    "AGRDE_50_SELNG_CO": "age50_selng_co",
+    "AGRDE_60_ABOVE_SELNG_CO": "age60_selng_co",
+    # 한글 컬럼 (기존 CSV 호환)
     "기준_년분기_코드": "base_yr_qtr_cd",
     "행정동_코드": "adm_cd",
     "행정동_코드_명": "adm_nm",
@@ -48,12 +99,6 @@ COL_MAP = {
     "금요일_매출_금액": "fri_sales_amt",
     "토요일_매출_금액": "sat_sales_amt",
     "일요일_매출_금액": "sun_sales_amt",
-    "시간대_00~06_매출_금액": "tm00_06_sales_amt",
-    "시간대_06~11_매출_금액": "tm06_11_sales_amt",
-    "시간대_11~14_매출_금액": "tm11_14_sales_amt",
-    "시간대_14~17_매출_금액": "tm14_17_sales_amt",
-    "시간대_17~21_매출_금액": "tm17_21_sales_amt",
-    "시간대_21~24_매출_금액": "tm21_24_sales_amt",
     "남성_매출_금액": "ml_sales_amt",
     "여성_매출_금액": "fml_sales_amt",
     "연령대_10_매출_금액": "age10_amt",
@@ -87,9 +132,10 @@ COL_MAP = {
     "연령대_60_이상_매출_건수": "age60_selng_co",
 }
 
+STR_COLS = {"base_yr_qtr_cd", "adm_cd", "adm_nm", "svc_induty_cd", "svc_induty_nm"}
+
 
 def to_num(val):
-    """빈값/공백 → None, 숫자 문자열 → int"""
     v = str(val).strip()
     if not v or v in ("-", "N/A", "null", "NULL"):
         return None
@@ -99,46 +145,68 @@ def to_num(val):
         return None
 
 
-def load_csv(cur, csv_path: str) -> tuple[int, int]:
-    """CSV 한 파일 → DB INSERT, (성공건, 스킵건) 반환"""
-    ok = skip = 0
+def load_file(cur, csv_path, year_flt=None, qtr_flt=None):
+    """
+    year_flt: "2024" → STDR_YYQU_CD가 2024로 시작하는 행만
+    qtr_flt:  "3"    → STDR_YYQU_CD가 XXXX3인 행만 (20243 등)
+    둘 다 지정 시 AND 조건 (예: 2024년 3분기 = "20243")
+    """
+    ok = skip = filtered = 0
 
-    with open(csv_path, encoding=ENCODING, newline="") as f:
+    # 인코딩 자동 감지
+    encoding = "utf-8-sig"
+    try:
+        with open(csv_path, encoding="utf-8-sig") as f:
+            f.read(1024)
+    except UnicodeDecodeError:
+        encoding = "cp949"
+
+    with open(csv_path, encoding=encoding, newline="") as f:
         reader = csv.DictReader(f)
-
-        # CSV 헤더 → DB 컬럼 매핑
         csv_cols = reader.fieldnames
+
+        # 헤더 매핑
         db_cols = []
         for c in csv_cols:
             mapped = COL_MAP.get(c.strip())
-            if mapped:
+            if mapped and mapped not in db_cols:
                 db_cols.append(mapped)
-            else:
-                print(f"  ⚠️  매핑 없는 컬럼 무시: '{c}'")
 
         if not db_cols:
-            print(f"  ❌ 매핑된 컬럼 없음, 스킵")
+            logger.error(f"매핑된 컬럼 없음: {csv_path}")
             return 0, 0
-
-        # VARCHAR 컬럼 (문자열 그대로), 나머지는 숫자 변환
-        STR_COLS = {
-            "base_yr_qtr_cd",
-            "adm_cd",
-            "adm_nm",
-            "svc_induty_cd",
-            "svc_induty_nm",
-        }
 
         placeholders = ", ".join(f":{i+1}" for i in range(len(db_cols)))
         sql = (
             f"INSERT INTO SANGKWON_SALES ({', '.join(db_cols)}) VALUES ({placeholders})"
         )
 
+        # STDR_YYQU_CD 컬럼 찾기 (영문/한글 둘 다)
+        qtr_col = next(
+            (c for c in csv_cols if c.strip() in ("STDR_YYQU_CD", "기준_년분기_코드")),
+            None,
+        )
+
         batch = []
         for row in reader:
+            # 연도/분기 필터
+            if qtr_col and (year_flt or qtr_flt):
+                qtr_val = str(row.get(qtr_col, "")).strip()
+                if year_flt and not qtr_val.startswith(year_flt):
+                    filtered += 1
+                    continue
+                if qtr_flt and not qtr_val.endswith(qtr_flt):
+                    filtered += 1
+                    continue
+
             vals = []
-            for csv_c, db_c in zip(csv_cols, db_cols):
-                raw = row.get(csv_c, "")
+            used = set()
+            for c in csv_cols:
+                db_c = COL_MAP.get(c.strip())
+                if not db_c or db_c not in db_cols or db_c in used:
+                    continue
+                used.add(db_c)
+                raw = row.get(c, "")
                 vals.append(raw.strip() if db_c in STR_COLS else to_num(raw))
             batch.append(vals)
 
@@ -147,64 +215,91 @@ def load_csv(cur, csv_path: str) -> tuple[int, int]:
                     cur.executemany(sql, batch)
                     ok += len(batch)
                 except Exception as e:
-                    print(f"  ⚠️  batch 오류 (개별 INSERT 시도): {e}")
-                    for row_vals in batch:
+                    for rv in batch:
                         try:
-                            cur.execute(sql, row_vals)
+                            cur.execute(sql, rv)
                             ok += 1
-                        except Exception as e2:
+                        except:
                             skip += 1
                 batch = []
 
-        # 나머지
         if batch:
             try:
                 cur.executemany(sql, batch)
                 ok += len(batch)
-            except Exception as e:
-                for row_vals in batch:
+            except:
+                for rv in batch:
                     try:
-                        cur.execute(sql, row_vals)
+                        cur.execute(sql, rv)
                         ok += 1
                     except:
                         skip += 1
 
+    if filtered:
+        logger.info(f"  필터 스킵: {filtered:,}건 (year={year_flt} qtr={qtr_flt})")
     return ok, skip
 
 
 def main():
-    print(f"CSV 폴더: {CSV_DIR}")
-    # 하위 폴더까지 재귀 탐색
-    csv_files = sorted(
-        glob.glob(os.path.join(CSV_DIR, "**", "*.csv"), recursive=True)
-        or glob.glob(os.path.join(CSV_DIR, "*.csv"))
+    # ── 인자 파싱 ─────────────────────────────────────────────
+    csv_dir = None
+    year_flt = None
+    qtr_flt = None
+
+    for a in sys.argv[1:]:
+        if a.startswith("--year="):
+            year_flt = a.split("=")[1]
+        elif a.startswith("--qtr="):
+            qtr_flt = a.split("=")[1]
+        elif not a.startswith("--"):
+            csv_dir = a
+
+    if not csv_dir:
+        csv_dir = os.path.join(BASE_DIR, "csv", "sangkwon_sales")
+
+    logger.info(f"CSV 폴더: {csv_dir}")
+    if year_flt:
+        logger.info(f"연도 필터: {year_flt}년")
+    if qtr_flt:
+        logger.info(f"분기 필터: {qtr_flt}분기")
+
+    # 파일 탐색
+    all_files = sorted(
+        glob.glob(os.path.join(csv_dir, "**", "*.csv"), recursive=True)
+        or glob.glob(os.path.join(csv_dir, "*.csv"))
     )
+
+    # 연도/분기 필터 (파일명 기준)
+    csv_files = []
+    for f in all_files:
+        fname = os.path.basename(f)
+        if year_flt and year_flt not in fname:
+            continue
+        csv_files.append(f)
+
     if not csv_files:
-        print(f"❌ CSV 파일 없음: {CSV_DIR}")
-        print(f"사용법: python load_sangkwon_sales_csv.py [폴더경로]")
-        print(
-            f"  예시: python load_sangkwon_sales_csv.py csv/sangkwon_sales/sangkwon_2024_utf8"
-        )
+        logger.error(f"CSV 파일 없음 (필터: year={year_flt} qtr={qtr_flt})")
         return
 
-    print(f"총 {len(csv_files)}개 CSV 파일 발견")
+    logger.info(f"총 {len(csv_files)}개 파일")
+
     con = oracledb.connect(DB_INFO)
     cur = con.cursor()
 
     total_ok = total_skip = 0
     for i, path in enumerate(csv_files, 1):
         fname = os.path.basename(path)
-        print(f"\n[{i}/{len(csv_files)}] {fname} ...")
-        ok, skip = load_csv(cur, path)
+        logger.info(f"[{i}/{len(csv_files)}] {fname}")
+        ok, skip = load_file(cur, path, year_flt=year_flt, qtr_flt=qtr_flt)
         con.commit()
         total_ok += ok
         total_skip += skip
-        print(f"  ✅ {ok:,}건 INSERT  |  ⚠️ {skip:,}건 스킵")
+        logger.info(f"  ✅ {ok:,}건 INSERT / {skip:,}건 스킵")
 
     cur.close()
     con.close()
-    print(f"\n{'='*40}")
-    print(f"완료: 총 {total_ok:,}건 INSERT  |  {total_skip:,}건 스킵")
+    logger.info(f"{'='*40}")
+    logger.info(f"완료: {total_ok:,}건 INSERT / {total_skip:,}건 스킵")
 
 
 if __name__ == "__main__":

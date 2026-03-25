@@ -744,7 +744,7 @@ export default function DongPanel({
             </div>
          </div>
 
-         {/* 분기 선택 드롭다운 - 매출 모드만 */}
+         {/* 년도/분기 선택 - 매출 모드만, DB에 있는 데이터만 표시 */}
          {quarters.length > 0 && !isRE && !isStore && (
             <div
                style={{
@@ -753,17 +753,26 @@ export default function DongPanel({
                   borderBottom: "1px solid #e5e7eb",
                   display: "flex",
                   alignItems: "center",
-                  gap: 8,
+                  gap: 6,
                }}
             >
                <span style={{ fontSize: 11, color: "#666", flexShrink: 0 }}>
-                  📅 분기
+                  📅
                </span>
+               {/* 년도 선택 */}
                <select
-                  value={selectedQuarter || ""}
-                  onChange={(e) => onQuarterChange(e.target.value)}
+                  value={
+                     selectedQuarter ? String(selectedQuarter).slice(0, 4) : ""
+                  }
+                  onChange={(e) => {
+                     const yr = e.target.value;
+                     // 해당 년도의 첫 번째 분기 자동 선택
+                     const first = quarters.find((q) =>
+                        String(q).startsWith(yr),
+                     );
+                     if (first) onQuarterChange(first);
+                  }}
                   style={{
-                     flex: 1,
                      fontSize: 12,
                      padding: "3px 6px",
                      borderRadius: 6,
@@ -771,11 +780,43 @@ export default function DongPanel({
                      background: "#fff",
                   }}
                >
-                  {quarters.map((q) => (
-                     <option key={q} value={q}>
-                        {String(q).replace(/(\d{4})(\d)/, "$1년 $2분기")}
-                     </option>
-                  ))}
+                  {[...new Set(quarters.map((q) => String(q).slice(0, 4)))]
+                     .sort()
+                     .reverse()
+                     .map((yr) => (
+                        <option key={yr} value={yr}>
+                           {yr}년
+                        </option>
+                     ))}
+               </select>
+               {/* 분기 선택 */}
+               <select
+                  value={selectedQuarter || ""}
+                  onChange={(e) => onQuarterChange(e.target.value)}
+                  style={{
+                     fontSize: 12,
+                     padding: "3px 6px",
+                     borderRadius: 6,
+                     border: "1px solid #d1d5db",
+                     background: "#fff",
+                  }}
+               >
+                  {quarters
+                     .filter((q) =>
+                        String(q).startsWith(
+                           selectedQuarter
+                              ? String(selectedQuarter).slice(0, 4)
+                              : String(quarters[quarters.length - 1]).slice(
+                                   0,
+                                   4,
+                                ),
+                        ),
+                     )
+                     .map((q) => (
+                        <option key={q} value={q}>
+                           {String(q).slice(4)}분기
+                        </option>
+                     ))}
                </select>
             </div>
          )}
