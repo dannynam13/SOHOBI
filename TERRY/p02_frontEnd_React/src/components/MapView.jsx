@@ -124,7 +124,7 @@ export default function MapView() {
             }
          })
          .catch(() => {});
-   }, []); 
+   }, []);
    useEffect(() => {
       clickModeRef.current = clickMode;
    }, [clickMode]);
@@ -179,14 +179,15 @@ export default function MapView() {
    };
 
    // ── 구/동 검색 → 폴리곤 하이라이트 ────────────────────────────
-   const handleSearch = (query) => {
+   const handleSearch = async (query) => {
       const bLayer = dongBoundaryLayerRef.current;
       if (!bLayer?.getSource?.()?.getFeatures) {
-         // WFS 미로드 시 먼저 로드
          ensureDongBoundaryLayer().then(() => handleSearch(query));
          return;
       }
       const q = query.trim();
+      if (!q) return;
+
       const features = bLayer.getSource().getFeatures();
 
       // 이전 선택 초기화
@@ -197,14 +198,29 @@ export default function MapView() {
       setDongPanel(null);
       setDongTooltip(null);
 
-      // 구이름 또는 동이름 매칭
-      const matched = features.filter((f) => {
+      // 1차: GeoJSON 폴리곤에서 직접 매칭
+      let matched = features.filter((f) => {
          const p = f.getProperties();
-         const dongNm = p.adm_nm || "";
-         const guNm = p.gu_nm || "";
-         const fullNm = p.gu_nm || "";
-         return dongNm.includes(q) || guNm.includes(q) || fullNm.includes(q);
+         return (p.adm_nm || "").includes(q) || (p.gu_nm || "").includes(q);
       });
+
+      // 2차: GeoJSON에서 못 찾으면 DB LIKE 검색 → adm_cd로 매칭
+      if (!matched.length) {
+         try {
+            const res = await fetch(
+               `${REALESTATE_URL}/realestate/search-dong?q=${encodeURIComponent(q)}`,
+            );
+            const jj = await res.json();
+            if (jj.data?.length) {
+               const admCds = new Set(jj.data.map((d) => d.adm_cd));
+               matched = features.filter((f) =>
+                  admCds.has(f.getProperties().adm_cd),
+               );
+            }
+         } catch (e) {
+            console.error("[search-dong]", e);
+         }
+      }
 
       if (!matched.length) return;
 
