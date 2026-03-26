@@ -16,6 +16,9 @@ ORACLE_DSN=...   # host:port/service_name
 import oracledb
 import os
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 행정동 코드 기반 지역 매핑 (208개 키워드)
 AREA_MAP = {
@@ -378,7 +381,9 @@ class CommercialRepository:
             cls._pool = oracledb.create_pool(
                 user=os.getenv("ORACLE_USER"),
                 password=os.getenv("ORACLE_PASSWORD"),
-                dsn=os.getenv("ORACLE_DSN"),
+                host=os.getenv("ORACLE_HOST"),
+                port=int(os.getenv("ORACLE_PORT", "1521")),
+                sid=os.getenv("ORACLE_SID"),
                 min=2,
                 max=5,
                 increment=1,
