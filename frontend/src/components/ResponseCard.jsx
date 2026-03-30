@@ -1,4 +1,5 @@
 import ReactMarkdown from "react-markdown";
+import SimulationChart from "./SimulationChart";
 
 const DOMAIN_KR = { finance: "재무", admin: "행정", legal: "법무", location: "상권분석" };
 const DOMAIN_COLOR = {
@@ -68,14 +69,8 @@ export default function ResponseCard({ question, domain, status, grade, confiden
           ) : (
             <>
               <ReactMarkdown>{draft}</ReactMarkdown>
-              {chart && (
-                <div className="mt-3">
-                  <img
-                    src={`data:image/png;base64,${chart}`}
-                    alt="시뮬레이션 결과 그래프"
-                    className="rounded-lg max-w-full"
-                  />
-                </div>
+              {chart && typeof chart === "object" && (
+                <SimulationChart chartData={chart} />
               )}
             </>
           )}
