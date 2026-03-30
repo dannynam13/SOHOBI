@@ -229,3 +229,4 @@ class FinanceAgent:
             "chart":          sim_result.get("chart"),   # base64 PNG 또는 None
             "updated_params": variables,                  # 누적된 파라미터 (프론트 저장용)
         }
+

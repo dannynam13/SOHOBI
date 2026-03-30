@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.font_manager as fm
 
-from CHANG.db_test import DBWork
+from db.finance_db import DBWork
 
 try:
     import matplotlib
@@ -198,9 +198,41 @@ class FinanceSimulationPlugin:
         months = math.ceil(initial_investment / avg_profit)
         return {"recoverable": True, "months": months}
 
-    # 누적 정보 반영을 위한 JSON 상태 관리용
+    # @kernel_function(
+    #     name="breakeven_analysis",
+    #     description="고정비와 변동비율을 입력받아 손익분기점 매출을 계산합니다."
+    # )
+    def breakeven_analysis(self, fixed_cost: float, variable_cost_ratio: float) -> dict:
+        # 단순계산
+        breakeven_revenue = fixed_cost / (1 - variable_cost_ratio)
+        return {
+            "breakeven_revenue": round(breakeven_revenue),
+            "breakeven_daily":   round(breakeven_revenue / 30),
+        }
+
+    def breakeven_analysis_mc(
+        self,
+        avg_revenue: float,
+        avg_net_profit: float,
+        variable_cost: float,
+    ) -> dict:
+        # MC 역산
+        avg_total_cost = avg_revenue - avg_net_profit
+        variable_cost_ratio = variable_cost / avg_revenue
+        fixed_cost = avg_total_cost - variable_cost
+
+        breakeven_revenue = fixed_cost / (1 - variable_cost_ratio)
+        safety_margin = (avg_revenue - breakeven_revenue) / avg_revenue
+
+        return {
+            "breakeven_revenue": round(breakeven_revenue),
+            "breakeven_daily":   round(breakeven_revenue / 30),
+            "safety_margin":     round(safety_margin, 4),
+        }
+
     def load_initial(self, region: str = None, industry: str = None) -> dict:
-        dbwork = DBWork() # 해당 DB작업파일 분리를 위해 개인폴더의 함수 끌어왔습니다 통합시 필요에따라 해당 파일(db_test.py)복사/변경 해주시면 됩니다
+        """지역/업종 코드를 받아 매충 데이터를 불러옵니다."""
+        dbwork = DBWork()
         if region is None and industry is None:
             # 지역/업종 입력 없는 경우 전체 평균
             revenue = dbwork.get_average_sales()
@@ -218,9 +250,6 @@ class FinanceSimulationPlugin:
             "fee": None,
             "initial_investment": None
         }
-    # DB에서 매출 값만 불러오게됩니다(.dbwork.get_sales(region, industry))
-    # base_revenue는 카페 기준으로 추후 수정될 수 있습니다.(industry 기반 평균치)
-    # region and industry의 경우 부모 에이전트에게서 받을 임시 정보입니다(지역 및 업종). 각 단일 코드 기반으로 변경
 
     def merge_json(self, previous: dict, current: dict) -> dict:
         """
