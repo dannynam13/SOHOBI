@@ -12,9 +12,14 @@ import DongTooltip from "./controls/DongTooltip";
 import WmsPopup from "./popup/WmsPopup";
 import StorePopup from "./popup/StorePopup";
 import ChatPanel from "./ChatPanel";
+import LandmarkPopup from "./popup/LandmarkPopup";
+import PopulationPanel from "./panel/PopulationPanel";
+import RoadviewPanel from "./panel/RoadviewPanel";
+import { usePopulationLayer } from "../hooks/usePopulationLayer";
 
 // ── 커스텀 훅 ──────────────────────────────────────────────────
 import { useMarkers } from "../hooks/useMarkers";
+import { useLandmarkLayer } from "../hooks/useLandmarkLayer";
 import {
    useDongLayer,
    DONG_STYLE_DEFAULT,
@@ -61,7 +66,7 @@ function getRadiusAndLimit(zoom) {
 export default function MapView() {
    const mapRef = useRef(null);
    const mapInstance = useMap(mapRef);
-   const clickModeRef = useRef(true);
+   const clickModeRef = useRef(false);
    const wmsLayerRef = useRef(null);
 
    const [coords, setCoords] = useState({ lat: "37.5665", lng: "126.9780" });
@@ -75,12 +80,23 @@ export default function MapView() {
    const [wmsPopup, setWmsPopup] = useState(null);
    const [landValue, setLandValue] = useState(null);
    const [showPanel, setShowPanel] = useState(false);
-   const [clickMode, setClickMode] = useState(true);
+   const [clickMode, setClickMode] = useState(false);
 
    const [dongMode, setDongMode] = useState("none");
    const [dongLoading, setDongLoading] = useState(false);
    const [dongPanel, setDongPanel] = useState(null);
    const [dongTooltip, setDongTooltip] = useState(null);
+   const [landmarkLoaded, setLandmarkLoaded] = useState(false);
+   const [showPopPanel, setShowPopPanel] = useState(false);
+   const [popVisible, setPopVisible] = useState(true);
+   const [popCount, setPopCount] = useState(0);
+   const [roadviewMode, setRoadviewMode] = useState(false);
+   const [roadviewPos, setRoadviewPos] = useState(null);
+   const [landmarkPopup, setLandmarkPopup] = useState(null);
+   const [lmKakao, setLmKakao] = useState(null);
+   const [lmKakaoLoading, setLmKakaoLoading] = useState(false);
+   const [festivalLoaded, setFestivalLoaded] = useState(false);
+   const [schoolLoaded, setSchoolLoaded] = useState(false);
    const [quarters, setQuarters] = useState([]);
    const [selectedQtr, setSelectedQtr] = useState("");
    const dongModeRef = useRef("none");
@@ -128,6 +144,7 @@ export default function MapView() {
          })
          .catch(() => {});
    }, []);
+
    useEffect(() => {
       clickModeRef.current = clickMode;
    }, [clickMode]);
@@ -139,10 +156,32 @@ export default function MapView() {
    const [svcData, setSvcData] = useState([]);
    const [selectedSvc, setSelectedSvc] = useState(""); // 업종 필터 선택값
 
-   const { allStoresRef, drawCircle, drawMarkers, clearMarkers } = useMarkers(
-      mapInstance,
-      visibleCats,
-   );
+   const { allStoresRef, drawCircle, drawMarkers, clearMarkers, selectMarker } =
+      useMarkers(mapInstance, visibleCats);
+
+   const { loadPopulation, setPopVisible: _setPopVis } =
+      usePopulationLayer(mapInstance);
+
+   const {
+      landmarkLayerRef,
+      festivalLayerRef,
+      schoolLayerRef,
+      loadLandmarks,
+      loadFestivals,
+      loadSchools,
+      selectLandmark,
+   } = useLandmarkLayer(mapInstance);
+
+   // ── 초기 랜드마크·학교·유동인구 전체 로드 (지도 준비 후 1회) ──
+   const landmarkInitRef = useRef(false);
+   useEffect(() => {
+      if (!mapInstance.current || landmarkInitRef.current) return;
+      landmarkInitRef.current = true;
+      loadLandmarks().then(() => setLandmarkLoaded(true));
+      loadSchools().then(() => setSchoolLoaded(true));
+      loadPopulation().then((n) => setPopCount(n || 0));
+   }, [mapInstance.current]); // eslint-disable-line
+
    const {
       dongBoundaryLayerRef,
       dongHoverFeatRef,
@@ -179,6 +218,56 @@ export default function MapView() {
          center: fromLonLat([lng, lat]),
          zoom,
          duration: 800,
+      });
+   };
+
+   // ── 상권분석 결과 → 해당 행정동 하이라이트 + 지도 이동 ────────
+   const handleHighlightArea = async (admCodes) => {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      // 동 경계 레이어 확보
+      await ensureDongBoundaryLayer();
+      const bLayer = dongBoundaryLayerRef.current;
+      if (!bLayer?.getSource?.()?.getFeatures) return;
+
+      const features = bLayer.getSource().getFeatures();
+
+      // 이전 검색 하이라이트 초기화
+      dongSearchFeatsRef.current.forEach((f) => f.setStyle(DONG_STYLE_DEFAULT));
+      dongSearchFeatsRef.current = [];
+      if (dongSelectedFeatRef.current) {
+         dongSelectedFeatRef.current.setStyle(DONG_STYLE_DEFAULT);
+         dongSelectedFeatRef.current = null;
+      }
+
+      // 빈 배열이면 초기화만 (비교 분석 등)
+      if (!admCodes?.length) return;
+
+      const admSet = new Set(admCodes.map((c) => String(c).trim()));
+
+      // 매칭 폴리곤 찾기 + 하이라이트
+      const matched = features.filter((f) =>
+         admSet.has((f.getProperties().adm_cd || "").trim()),
+      );
+      if (!matched.length) return;
+
+      matched.forEach((f) => f.setStyle(DONG_STYLE_SELECTED));
+      dongSearchFeatsRef.current = matched;
+
+      // 전체 extent 계산 후 지도 이동
+      let extent = matched[0].getGeometry().getExtent().slice();
+      for (let i = 1; i < matched.length; i++) {
+         const e = matched[i].getGeometry().getExtent();
+         extent[0] = Math.min(extent[0], e[0]);
+         extent[1] = Math.min(extent[1], e[1]);
+         extent[2] = Math.max(extent[2], e[2]);
+         extent[3] = Math.max(extent[3], e[3]);
+      }
+      map.getView().fit(extent, {
+         padding: [80, 480, 80, 80],
+         duration: 800,
+         maxZoom: 16,
       });
    };
 
@@ -311,6 +400,10 @@ export default function MapView() {
             const _guNm = p.gu_nm || currentGuNmRef.current || "";
             setDongLoading(true);
             setDongPanel(null);
+            // 축제만 동 클릭 시 로드 (실시간 API)
+            if (_admCd) {
+               loadFestivals(_admCd).then(() => setFestivalLoaded(true));
+            }
             try {
                if (next === "sales") {
                   const qtrParam = selectedQtr
@@ -627,15 +720,46 @@ export default function MapView() {
          }
          setWmsPopup(null);
 
+         // 로드뷰 모드: 클릭 좌표로 로드뷰 열기
+         if (roadviewMode) {
+            const [lng, lat] = toLonLat(e.coordinate);
+            setRoadviewPos({ lat, lng });
+            return;
+         }
+
          const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
+
+         // 랜드마크/학교 마커 클릭
+         if (feature?.get("lmData")) {
+            selectLandmark(feature);
+            const lmData = feature.get("lmData");
+            setLandmarkPopup(lmData);
+            setPopup(null); // StorePopup 닫기
+            setKakaoDetail(null);
+            // 카카오맵 검색
+            setLmKakao(null);
+            setLmKakaoLoading(true);
+            fetchKakaoDetail(
+               lmData.title || lmData.school_nm,
+               lmData.addr || lmData.road_addr,
+            ).then((d) => {
+               setLmKakao(d);
+               setLmKakaoLoading(false);
+            });
+            return;
+         }
+
          if (feature?.get("store")) {
             const store = feature.get("store");
+            selectMarker(feature); // 하이라이트
+            setLandmarkPopup(null); // LandmarkPopup 닫기
+            selectLandmark(null);
             setPopup(store);
             setKakaoDetail(null);
             setLoadingDetail(true);
             const detail = await fetchKakaoDetail(
-               store.상호명,
-               store.도로명주소,
+               store.STORE_NM,
+               store.ROAD_ADDR,
             );
             setKakaoDetail(detail);
             setLoadingDetail(false);
@@ -709,6 +833,9 @@ export default function MapView() {
             onDongMode={handleDongMode}
             dongLoading={dongLoading}
             currentGuNm={currentGuNmRef.current}
+            roadviewMode={roadviewMode}
+            onRoadviewToggle={() => setRoadviewMode((v) => !v)}
+            onPopPanel={() => setShowPopPanel((v) => !v)}
          />
          <button
             className="mv-layer-btn"
@@ -722,9 +849,47 @@ export default function MapView() {
                   map={mapInstance.current}
                   vworldKey={import.meta.env.VITE_VWORLD_API_KEY}
                   wmsLayerRef={wmsLayerRef}
+                  landmarkLayerRef={landmarkLayerRef}
+                  festivalLayerRef={festivalLayerRef}
+                  schoolLayerRef={schoolLayerRef}
+                  landmarkLoaded={landmarkLoaded}
+                  festivalLoaded={festivalLoaded}
+                  schoolLoaded={schoolLoaded}
                />
             </div>
          )}
+         {showPopPanel && (
+            <PopulationPanel
+               onClose={() => setShowPopPanel(false)}
+               visible={popVisible}
+               onToggle={() => {
+                  const next = !popVisible;
+                  setPopVisible(next);
+                  _setPopVis(next);
+               }}
+               count={popCount}
+            />
+         )}
+         {roadviewPos && (
+            <RoadviewPanel
+               lat={roadviewPos.lat}
+               lng={roadviewPos.lng}
+               onClose={() => {
+                  setRoadviewPos(null);
+                  setRoadviewMode(false);
+               }}
+            />
+         )}
+         <LandmarkPopup
+            popup={landmarkPopup}
+            kakaoDetail={lmKakao}
+            loadingDetail={lmKakaoLoading}
+            onClose={() => {
+               setLandmarkPopup(null);
+               setLmKakao(null);
+               selectLandmark(null);
+            }}
+         />
          <WmsPopup
             wmsPopup={wmsPopup}
             landValue={landValue}
@@ -761,6 +926,7 @@ export default function MapView() {
             mapContext={chatContext}
             onNavigate={handleChatNavigate}
             onClearContext={() => setChatContext(null)}
+            onHighlightArea={handleHighlightArea}
          />
          <div className="coord-bar">
             📍 위도: {coords.lat} | 경도: {coords.lng}

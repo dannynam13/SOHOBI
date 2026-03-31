@@ -171,11 +171,18 @@ class LocationAgent:
 
     # ── 파라미터 추출 ───────────────────────────────────────────
 
-    async def _extract_params(self, question: str) -> dict:
+    async def _extract_params(self, question: str, prior_history: list[dict] | None = None) -> dict:
         """자연어 질문 → {mode, locations, business_type, quarter}"""
+        history_ctx = ""
+        if prior_history:
+            lines = []
+            for msg in prior_history:
+                role_label = "사용자" if msg["role"] == "user" else "에이전트"
+                lines.append(f"[{role_label}] {msg['content']}")
+            history_ctx = "이전 대화 맥락:\n" + "\n".join(lines) + "\n\n"
         raw = await self._call_llm(
             "You are a parameter extractor. Output JSON only.",
-            _PARAM_EXTRACT_PROMPT.format(user_input=question),
+            history_ctx + _PARAM_EXTRACT_PROMPT.format(user_input=question),
         )
         clean = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
         try:
@@ -222,26 +229,34 @@ class LocationAgent:
 
     async def analyze(
         self, location: str, business_type: str, quarter: str = "20244"
-    ) -> str:
-        """단일 지역 상권 분석 → 마크다운 텍스트 반환"""
+    ) -> dict:
+        """단일 지역 상권 분석 → {draft, adm_codes, type} dict 반환"""
         supported = self._repo.get_supported_industries()
         if business_type not in supported:
-            return f"죄송합니다. '{business_type}' 업종은 현재 지원하지 않습니다.\n지원 업종: {', '.join(sorted(supported))}"
+            return {
+                "draft": f"죄송합니다. '{business_type}' 업종은 현재 지원하지 않습니다.\n지원 업종: {', '.join(sorted(supported))}",
+                "adm_codes": [],
+                "type": "analyze",
+            }
 
         sales_data = self._repo.get_sales(location, business_type, quarter)
         store_data = self._repo.get_store_count(location, business_type, quarter)
 
         if not sales_data and not store_data:
-            return (
-                f"'{location}' 지역의 '{business_type}' 업종 데이터를 찾을 수 없습니다.\n"
-                "지역명 또는 업종명을 확인해 주십시오."
-            )
+            return {
+                "draft": (
+                    f"'{location}' 지역의 '{business_type}' 업종 데이터를 찾을 수 없습니다.\n"
+                    "지역명 또는 업종명을 확인해 주십시오."
+                ),
+                "adm_codes": [],
+                "type": "analyze",
+            }
 
         # 점포당 평균 매출 계산
-        monthly_sales = (
+        monthly_sales = float(
             sales_data.get("summary", {}).get("monthly_sales_krw", 0) if sales_data else 0
         )
-        store_count = (
+        store_count = int(
             store_data.get("summary", {}).get("store_count", 0) if store_data else 0
         )
         avg_per_store = int(monthly_sales / store_count) if store_count > 0 else 0
@@ -250,8 +265,8 @@ class LocationAgent:
         if sales_data and store_data:
             store_map = {b["trdar_name"]: b for b in store_data.get("breakdown", [])}
             for s in sales_data.get("breakdown", []):
-                s_count = store_map.get(s["trdar_name"], {}).get("store_count", 0)
-                s_sales = s.get("monthly_sales_krw", 0)
+                s_count = int(store_map.get(s["trdar_name"], {}).get("store_count", 0))
+                s_sales = float(s.get("monthly_sales_krw", 0))
                 s["avg_sales_per_store_krw"] = int(s_sales / s_count) if s_count > 0 else 0
 
         analysis = await self._run_agent(location, business_type, quarter, sales_data, store_data)
@@ -265,7 +280,7 @@ class LocationAgent:
         )
         if similar:
             rows = "\n".join(
-                f"| {i+1} | {s['trdar_name']} | {s['monthly_sales_krw']:,}원 | "
+                f"| {i+1} | {s['adm_name']} | {s['monthly_sales_krw']:,}원 | "
                 f"{s['store_count']}개 | {s['avg_sales_per_store_krw']:,}원 |"
                 for i, s in enumerate(similar)
             )
@@ -277,7 +292,8 @@ class LocationAgent:
             )
             analysis += similar_table
 
-        return analysis
+        adm_codes = self._repo._get_adm_codes(location)
+        return {"draft": analysis, "adm_codes": adm_codes, "type": "analyze"}
 
     # ── DB 조회 + LLM 복수 지역 비교 ───────────────────────────
 
@@ -295,11 +311,15 @@ class LocationAgent:
 
     async def compare(
         self, locations: list[str], business_type: str, quarter: str = "20244"
-    ) -> str:
-        """복수 지역 비교 → 마크다운 텍스트 반환"""
+    ) -> dict:
+        """복수 지역 비교 → {draft, adm_codes, type} dict 반환"""
         supported = self._repo.get_supported_industries()
         if business_type not in supported:
-            return f"죄송합니다. '{business_type}' 업종은 현재 지원하지 않습니다.\n지원 업종: {', '.join(sorted(supported))}"
+            return {
+                "draft": f"죄송합니다. '{business_type}' 업종은 현재 지원하지 않습니다.\n지원 업종: {', '.join(sorted(supported))}",
+                "adm_codes": [],
+                "type": "compare",
+            }
 
         year = quarter[:4]
         q = quarter[4]
@@ -313,8 +333,8 @@ class LocationAgent:
 
             ss = sales.get("summary", {}) if sales else {}
             st = store.get("summary", {}) if store else {}
-            monthly = ss.get("monthly_sales_krw", 0)
-            cnt = st.get("store_count", 0)
+            monthly = float(ss.get("monthly_sales_krw", 0))
+            cnt = int(st.get("store_count", 0))
             avg = int(monthly / cnt) if cnt > 0 else 0
 
             location_data.append({
@@ -331,9 +351,17 @@ class LocationAgent:
             })
 
         if not location_data:
-            return "요청하신 지역들의 데이터를 찾을 수 없습니다. 지역명을 확인해 주십시오."
+            return {
+                "draft": "요청하신 지역들의 데이터를 찾을 수 없습니다. 지역명을 확인해 주십시오.",
+                "adm_codes": [],
+                "type": "compare",
+            }
 
-        return await self._run_compare_agent(location_data, business_type, year, q)
+        analysis = await self._run_compare_agent(location_data, business_type, year, q)
+        all_adm_codes = []
+        for loc in locations:
+            all_adm_codes.extend(self._repo._get_adm_codes(loc))
+        return {"draft": analysis, "adm_codes": all_adm_codes, "type": "compare"}
 
     # ── 오케스트레이터 진입점 ───────────────────────────────────
 
@@ -343,24 +371,32 @@ class LocationAgent:
         question: str,
         retry_prompt: str = "",
         profile: str = "",
-    ) -> str:
-        params = await self._extract_params(question)
+        prior_history: list[dict] | None = None,
+    ) -> dict:
+        params = await self._extract_params(question, prior_history=prior_history)
         mode = params["mode"]
         locations = params["locations"]
         business_type = params["business_type"]
         quarter = params["quarter"]
 
         if not locations or not business_type:
-            return (
-                "분석할 지역명과 업종을 명시해 주십시오.\n"
-                "예: '홍대 카페 상권 분석', '강남 vs 잠실 한식 비교'"
-            )
+            return {
+                "draft": (
+                    "분석할 지역명과 업종을 명시해 주십시오.\n"
+                    "예: '홍대 카페 상권 분석', '강남 vs 잠실 한식 비교'"
+                ),
+                "adm_codes": [],
+                "type": mode,
+            }
 
         # draft 생성
         if mode == "compare" and len(locations) >= 2:
-            draft = await self.compare(locations, business_type, quarter)
+            result = await self.compare(locations, business_type, quarter)
         else:
-            draft = await self.analyze(locations[0], business_type, quarter)
+            result = await self.analyze(locations[0], business_type, quarter)
+
+        draft = result["draft"]
+        adm_codes = result["adm_codes"]
 
         # retry_prompt 반영 (sign-off 재시도)
         # 데이터 부재·미지원 업종 응답은 재시도해도 달라지지 않으므로 건너뜀
@@ -399,4 +435,4 @@ class LocationAgent:
                 # 빈 응답 등 retry LLM 실패 시 이전 draft 유지
                 logger.warning("LocationAgent retry LLM 실패 — 이전 draft 유지")
 
-        return draft
+        return {"draft": draft, "adm_codes": adm_codes, "type": mode}

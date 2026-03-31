@@ -39,7 +39,7 @@ curl -s -X POST http://localhost:8000/api/v1/query \
 | `frontend/` | React + Vite + Tailwind 프론트엔드 |
 | `docs/session-reports/` | 세션 리포트 (날짜별) |
 | `docs/architecture/` | 아키텍처 다이어그램 (HTML) |
-| `docs/plans/` | 개선·테스트 플랜 문서 |
+| `docs/plans/` | 개선·테스트 플랜 문서 (`YYYY-MM-DD-이름.md` 형식) |
 | `CHANG/`, `CHOI/`, `NAM/`, `PARK/`, `TERRY/` | 팀원별 개발 폴더 |
 
 ## 코드 규칙
@@ -49,6 +49,12 @@ curl -s -X POST http://localhost:8000/api/v1/query \
 - **백엔드**: FastAPI + Semantic Kernel + Azure AI Foundry (GPT-4o)
 - **프론트엔드**: React + Vite + Tailwind CSS
 - 에이전트 코드는 `integrated_PARK/agents/`에서만 수정
+
+## 플랜 문서 규칙
+
+- 구현 계획·분석·테스트 플랜 등 내부 플랜 문서를 작성할 때는 **반드시 `docs/plans/YYYY-MM-DD-이름.md`** 형식으로 저장한다.
+- Claude Code 내부 플랜(`~/.claude/plans/`)에 저장되는 경우에도 동시에 같은 내용을 `docs/plans/`에 날짜 파일명으로 기록한다.
+- 날짜는 문서 작성일 기준. 파일명은 영어 소문자 + 하이픈(kebab-case).
 
 ## PR / 커밋 규칙
 
@@ -61,6 +67,37 @@ curl -s -X POST http://localhost:8000/api/v1/query \
 - 수정된 파일 목록
 - 현재 발생 중인 에러 메시지
 - 현재 브랜치명
+
+## 백엔드 로그 가져오기
+
+현재 배포 백엔드: **Azure Container Apps**
+URL 및 시크릿은 `integrated_PARK/.env`의 `BACKEND_HOST`, `EXPORT_SECRET` 참조.
+
+### 로그 조회 (curl — 권장)
+
+현재 Azure Container Apps 백엔드는 로그를 Blob Storage에 기록하므로 `/api/v1/logs/export`(파일 다운로드)는 사용 불가. `/api/v1/logs` 읽기 API를 사용한다.
+
+```bash
+# .env에서 BACKEND_HOST, EXPORT_SECRET 로드 후 실행
+source integrated_PARK/.env   # 또는 직접 값 입력
+
+# 최근 N개 쿼리 조회 (type: queries | rejections | errors)
+curl -s "$BACKEND_HOST/api/v1/logs?type=queries&limit=50" | python3 -m json.tool
+
+# 특정 시간대 필터링 (Python으로 파싱)
+curl -s "$BACKEND_HOST/api/v1/logs?type=queries&limit=200" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+for e in data['entries']:
+    if '2026-03-26T07:' <= e['ts'] <= '2026-03-26T09:':
+        print(e['ts'], e.get('grade'), e.get('retry_count'), e.get('question','')[:60])
+"
+```
+
+### 참고
+
+- `scripts/pull_logs.py` — `BACKEND_HOST` 환경변수 기반 다운로드 스크립트 (Blob Storage 구성에서는 export 엔드포인트가 404 반환됨)
+- `scripts/outdated/pull_logs_railway.py` — 구 Railway 백엔드용 스크립트 (사용 안 함)
 
 ## 주의 사항
 

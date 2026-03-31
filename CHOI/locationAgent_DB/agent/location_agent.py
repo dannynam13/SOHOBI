@@ -30,6 +30,7 @@ from semantic_kernel.connectors.ai.open_ai import (
 from semantic_kernel.functions import KernelArguments
 
 from db.repository import CommercialRepository
+from chart.location_chart import generate_analyze_charts, generate_compare_charts
 
 # ── Kernel 싱글턴 ──────────────────────────────────────────
 _shared_kernel = None
@@ -198,8 +199,19 @@ class LocationAgent:
         )
 
         if not sales_data and not store_data:
+            year = quarter[:4]
+            q = quarter[4:]
             return {
-                "error": "데이터 없음",
+                "error": (
+                    f"'{location}' 지역의 '{business_type}' 업종 데이터를 찾을 수 없습니다.\n\n"
+                    f"📅 조회 기간: {year}년 {q}분기\n\n"
+                    "가능한 원인:\n"
+                    "• 서울시 외 지역 (서울시 행정동만 지원)\n"
+                    "• 해당 지역에 해당 업종 데이터가 없음\n"
+                    "• 지역명이 정확하지 않음\n\n"
+                    "💡 서울시 내 지역명으로 다시 시도해 보세요.\n"
+                    "예: 홍대, 강남, 잠실, 이태원, 서초, 건대 등"
+                ),
                 "location": location,
                 "business_type": business_type,
                 "quarter": quarter,
@@ -244,6 +256,13 @@ class LocationAgent:
             ),
         )
 
+        # ── 차트 생성 (sales_summary 기반) ──────────────────
+        chart_b64 = []
+        if sales_data:
+            chart_b64 = generate_analyze_charts(
+                sales_data["summary"], location, business_type,
+            )
+
         return {
             "location": location,
             "business_type": business_type,
@@ -252,6 +271,7 @@ class LocationAgent:
             "store_data": store_data,  # {summary, breakdown} — 원본 유지
             "analysis": analysis,
             "similar_locations": similar,  # 추천 상권
+            "charts": chart_b64,
         }
 
     async def _run_agent(
@@ -416,6 +436,7 @@ class LocationAgent:
                 item = {
                     "location": loc,
                     "monthly_sales": _format_krw(monthly),
+                    "monthly_sales_raw": monthly,
                     "weekday_pct": _calc_pct(ss.get("weekday_sales_krw", 0), monthly),
                     "weekend_pct": _calc_pct(ss.get("weekend_sales_krw", 0), monthly),
                     "peak_time": _find_peak_time(ss),
@@ -438,17 +459,27 @@ class LocationAgent:
             if store:
                 item["store_count"] = cnt
                 item["avg_sales_per_store"] = _format_krw(avg) if avg else "데이터 없음"
+                item["avg_per_store_raw"] = avg or 0
                 item["open_rate_pct"] = st.get("open_rate_pct", 0)
                 item["close_rate_pct"] = st.get("close_rate_pct", 0)
 
             location_data.append(item)
 
         if not location_data:
-            return {"error": "데이터 없음"}
+            return {
+                "error": (
+                    "비교할 지역들의 데이터를 찾을 수 없습니다.\n\n"
+                    "💡 서울시 내 지역명으로 다시 시도해 보세요.\n"
+                    "예: '강남 vs 홍대 카페 비교'"
+                ),
+            }
 
         comparison = await self._run_compare_agent(
             location_data, business_type, year, q
         )
+
+        # ── 비교 차트 생성 ────────────────────────────────────
+        charts = generate_compare_charts(location_data, business_type)
 
         return {
             "locations": locations,
@@ -456,6 +487,7 @@ class LocationAgent:
             "quarter": quarter,
             "data": location_data,
             "comparison": comparison,
+            "charts": charts,
         }
 
     async def _run_compare_agent(
