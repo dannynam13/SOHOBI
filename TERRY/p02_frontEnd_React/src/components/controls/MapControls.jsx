@@ -11,6 +11,9 @@ export default function MapControls({
    onDongMode,
    dongLoading,
    currentGuNm,
+   roadviewMode,
+   onRoadviewToggle,
+   onPopPanel,
 }) {
    return (
       <>
@@ -30,6 +33,20 @@ export default function MapControls({
                   반경 500m · {nearbyCount}건
                </span>
             )}
+            <button
+               className={`mv-ctrl-btn ${roadviewMode ? "mv-ctrl-btn--on" : "mv-ctrl-btn--off"}`}
+               onClick={onRoadviewToggle}
+               title="로드뷰 모드 ON/OFF"
+            >
+               {roadviewMode ? "🚶 로드뷰 ON" : "🚶 로드뷰 OFF"}
+            </button>
+            <button
+               className="mv-ctrl-btn mv-ctrl-btn--off"
+               onClick={onPopPanel}
+               title="유동인구 패널"
+            >
+               👥 유동인구
+            </button>
             {loading && <span className="mv-ctrl-loading">DB 조회 중...</span>}
             {nearbyCount !== null && (
                <button className="mv-ctrl-clear" onClick={onClear}>
@@ -104,7 +121,7 @@ export default function MapControls({
                   { mode: "sales", label: "매출", activeColor: "#059669" },
                   {
                      mode: "realestate",
-                     label: "실거래가",
+                     label: "부동산",
                      activeColor: "#2563EB",
                   },
                ].map(({ mode, label, activeColor }) => {

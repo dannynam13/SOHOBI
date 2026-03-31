@@ -1,4 +1,11 @@
-const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+// SWA 프록시 사용 시 VITE_API_URL을 빈 문자열로 설정하면 상대경로(/api/...)로 동작한다.
+// 로컬 개발 시 VITE_API_URL=http://localhost:8000 으로 설정한다.
+const BASE_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+const _API_KEY = import.meta.env.VITE_API_KEY || "";
+const _AUTH_HEADERS = {
+  "Content-Type": "application/json",
+  ...(_API_KEY ? { "X-API-Key": _API_KEY } : {}),
+};
 
 /**
  * POST /api/v1/query
@@ -8,12 +15,13 @@ const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
  * @returns {Promise<{session_id, request_id, status, grade, confidence_note,
  *   domain, draft, retry_count, agent_ms, signoff_ms, message, rejection_history?}>}
  */
-export async function sendQuery(question, maxRetries = 3, sessionId = null) {
+export async function sendQuery(question, maxRetries = 3, sessionId = null, currentParams = null) {
   const body = { question, domain: null, max_retries: maxRetries };
   if (sessionId) body.session_id = sessionId;
+  if (currentParams) body.current_params = currentParams;
   const res = await fetch(`${BASE_URL}/api/v1/query`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: _AUTH_HEADERS,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -31,13 +39,14 @@ export async function sendQuery(question, maxRetries = 3, sessionId = null) {
  * @param {(eventName: string, data: object) => void} onEvent  이벤트 콜백
  * @returns {Promise<void>}  스트림 종료 시 resolve
  */
-export async function streamQuery(question, maxRetries = 3, sessionId = null, onEvent) {
+export async function streamQuery(question, maxRetries = 3, sessionId = null, onEvent, currentParams = null) {
   const body = { question, domain: null, max_retries: maxRetries };
   if (sessionId) body.session_id = sessionId;
+  if (currentParams) body.current_params = currentParams;
 
   const res = await fetch(`${BASE_URL}/api/v1/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: _AUTH_HEADERS,
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -85,9 +94,10 @@ export async function streamQuery(question, maxRetries = 3, sessionId = null, on
  * @param {number} limit
  * @returns {Promise<{type, count, entries: Array}>}
  */
-export async function fetchLogs(type = "queries", limit = 50) {
+export async function fetchLogs(type = "queries", limit = 500) {
   const res = await fetch(
-    `${BASE_URL}/api/v1/logs?type=${type}&limit=${limit}`
+    `${BASE_URL}/api/v1/logs?type=${type}&limit=${limit}`,
+    { headers: _AUTH_HEADERS }
   );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

@@ -15,14 +15,16 @@ from contextlib import asynccontextmanager
 import traceback
 from uuid import uuid4
 
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 from dotenv import load_dotenv
 
 import domain_router
 import orchestrator
+from auth import verify_api_key
 from signoff.signoff_agent import run_signoff
 from kernel_setup import get_kernel, get_signoff_client, _TOKEN_PROVIDER
 from logger import log_query, log_error
@@ -32,6 +34,7 @@ from variable_extractor import extract_financial_vars
 from session_store import (
     get_query_session, save_query_session,
     get_doc_history, save_doc_history,
+    get_recent_history,
 )
 import session_store
 
@@ -45,19 +48,55 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SOHOBI Integrated API", version="1.1.0", lifespan=lifespan)
+
+# ── CORS: 허용 origin 명시적 화이트리스트 ─────────────────────
+_ALLOWED_ORIGINS = [
+    "https://sohobi.net",
+    "https://www.sohobi.net",
+    "https://delightful-rock-0de6c000f.6.azurestaticapps.net",
+]
+_extra_origins = os.getenv("CORS_EXTRA_ORIGINS", "")
+if _extra_origins:
+    _ALLOWED_ORIGINS.extend([o.strip() for o in _extra_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
+    max_age=600,
 )
+
+# ── IP 화이트리스트 미들웨어 (환경변수 미설정 시 비활성화) ────
+class _IPFilterMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, allowed_ips: set[str]):
+        super().__init__(app)
+        self.allowed_ips = allowed_ips
+
+    async def dispatch(self, request: Request, call_next):
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        client_ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else ""
+        )
+        if client_ip not in self.allowed_ips:
+            import logging
+            logging.getLogger("sohobi.security").warning(
+                "IP_BLOCKED ip=%r path=%r", client_ip, request.url.path
+            )
+            return JSONResponse(status_code=403, content={"error": "접근이 제한된 IP입니다."})
+        return await call_next(request)
+
+_allowed_ips_raw = os.getenv("ALLOWED_IPS", "")
+_allowed_ips = {ip.strip() for ip in _allowed_ips_raw.split(",") if ip.strip()}
+if _allowed_ips:
+    app.add_middleware(_IPFilterMiddleware, allowed_ips=_allowed_ips)
 
 
 # ── 스키마 ────────────────────────────────────────────────────
 
 class QueryRequest(BaseModel):
-    question: str
+    question: str = Field(..., max_length=2000, description="최대 2,000자")
     session_id: str | None = Field(default=None, description="생략 시 서버가 새 UUID를 발급한다")
     founder_context: str | None = Field(
         default=None,
@@ -80,6 +119,27 @@ class SignoffRequest(BaseModel):
 class DocChatRequest(BaseModel):
     message: str
     session_id: str = Field(default="default")
+
+
+# ── 보안: 프롬프트 인젝션 의심 패턴 ──────────────────────────
+import re as _re
+
+_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?.*instruction",
+    r"approved\s*[=:]\s*true",
+    r"\{\{.*\}\}",
+    r"\[SYSTEM\]",
+    r"<<<",
+    r"override\s+(the\s+)?rubric",
+    r"evaluation\s+rule",
+    r"무조건\s*(통과|승인|approved)",
+    r"평가\s*(규칙|기준).*(무시|비활성|적용\s*하지)",
+]
+
+def _detect_injection(text: str) -> bool:
+    """의심 패턴 감지 — 거부가 아닌 로깅 목적."""
+    t = text.lower()
+    return any(_re.search(p, t) for p in _INJECTION_PATTERNS)
 
 
 # ── 내부 헬퍼 ─────────────────────────────────────────────────
@@ -107,11 +167,18 @@ async def health():
     }
 
 
-@app.post("/api/v1/query")
+@app.post("/api/v1/query", dependencies=[Depends(verify_api_key)])
 async def query(req: QueryRequest):
     """Q&A 플로우: 질문 → 도메인 분류 → 에이전트(창업자 컨텍스트 주입) → Sign-off → 최종 응답"""
     t0 = time.monotonic()
     try:
+        # ── 프롬프트 인젝션 의심 패턴 감지 (거부 없이 로깅만) ─
+        if _detect_injection(req.question):
+            import logging
+            logging.getLogger("sohobi.security").warning(
+                "INJECTION_SUSPECT question=%r", req.question[:200]
+            )
+
         # ── 세션 복원 또는 신규 생성 ──────────────────────────
         sid     = req.session_id or str(uuid4())
         session = await get_query_session(sid)
@@ -121,11 +188,23 @@ async def query(req: QueryRequest):
             session["profile"] = req.founder_context
 
         # ── 도메인 분류 ───────────────────────────────────────
+        # 라우터는 항상 실행한다 (클라이언트 domain 지정 여부와 무관)
+        classification = await domain_router.classify(req.question)
+        router_domain = classification["domain"]
+        router_confidence = classification.get("confidence", 0.0)
+
         if req.domain in ("admin", "finance", "legal", "location"):
-            domain = req.domain
+            if router_domain != req.domain and router_confidence >= 0.8:
+                import logging
+                logging.getLogger("sohobi.security").warning(
+                    "DOMAIN_OVERRIDE client=%r router=%r confidence=%.2f question=%r",
+                    req.domain, router_domain, router_confidence, req.question[:100],
+                )
+                domain = router_domain   # 라우터 결과 우선
+            else:
+                domain = req.domain      # 라우터 확신 부족 → 클라이언트 지정 존중
         else:
-            classification = await domain_router.classify(req.question)
-            domain = classification["domain"]
+            domain = router_domain
 
         # ── 오케스트레이터 실행 ───────────────────────────────
         # current_params: 클라이언트 전달값 우선, 없으면 서버 세션 추출값 사용
@@ -135,6 +214,7 @@ async def query(req: QueryRequest):
             question=req.question,
             profile=session["profile"],
             session_id=sid,
+            prior_history=get_recent_history(session["history"]),
             max_retries=req.max_retries,
             current_params=params,
         )
@@ -181,6 +261,12 @@ async def query(req: QueryRequest):
             ),
         }
     except Exception as e:
+        err_str = str(e).lower()
+        if "content_filter" in err_str or "content filter" in err_str:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "죄송합니다. 해당 질의는 처리할 수 없습니다."},
+            )
         log_error(
             request_id=str(uuid4()),
             session_id=req.session_id or "",
@@ -192,7 +278,7 @@ async def query(req: QueryRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/api/v1/stream")
+@app.post("/api/v1/stream", dependencies=[Depends(verify_api_key)])
 async def stream_query(req: QueryRequest):
     """Q&A 플로우: SSE로 실시간 진행 상황 전달.
     각 단계(에이전트 시작/완료, Sign-off 판정, 최종 결과)를 이벤트로 스트리밍한다.
@@ -262,6 +348,10 @@ async def stream_query(req: QueryRequest):
                 yield f"event: {event_name}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
         except Exception as e:
+            err_str = str(e).lower()
+            if "content_filter" in err_str or "content filter" in err_str:
+                yield f"event: error\ndata: {json.dumps({'message': '죄송합니다. 해당 질의는 처리할 수 없습니다.'}, ensure_ascii=False)}\n\n"
+                return
             log_error(
                 request_id=str(uuid4()),
                 session_id=sid,
@@ -279,7 +369,7 @@ async def stream_query(req: QueryRequest):
     )
 
 
-@app.post("/api/v1/signoff")
+@app.post("/api/v1/signoff", dependencies=[Depends(verify_api_key)])
 async def signoff(req: SignoffRequest):
     """기존 draft를 Sign-off Agent에 단독으로 검증한다."""
     try:
@@ -292,7 +382,7 @@ async def signoff(req: SignoffRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/api/v1/doc/chat")
+@app.post("/api/v1/doc/chat", dependencies=[Depends(verify_api_key)])
 async def doc_chat(req: DocChatRequest):
     """
     문서 생성 플로우 (NAM):
@@ -393,7 +483,7 @@ async def export_logs(
     )
 
 
-@app.get("/api/v1/logs")
+@app.get("/api/v1/logs", dependencies=[Depends(verify_api_key)])
 async def get_logs(type: str = "queries", limit: int = 50):
     """JSONL 로그 파일을 파싱해 JSON 배열로 반환 (프론트엔드 로그 뷰어용)."""
     if type not in ("queries", "rejections", "errors"):

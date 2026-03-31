@@ -3,45 +3,16 @@
 출처: CHANG/user_functions.py — FinanceSimulationSkill
 """
 
-import base64
-import io
 import math
 import os
 import random
 from semantic_kernel.functions import kernel_function
 
-from db.finance_db import DBWork
-
 try:
-    import matplotlib
-    matplotlib.use("Agg")  # 헤드리스 환경 (서버/컨테이너)
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    import matplotlib.font_manager as fm
-    import numpy as np
-
-    # 한글 폰트 설정
-    # 1순위: 프로젝트 번들 폰트 (nam/malgun.ttf) — 배포 환경에서도 항상 사용 가능
-    _BUNDLED_FONT = os.path.join(os.path.dirname(__file__), "..", "nam", "malgun.ttf")
-    if os.path.exists(_BUNDLED_FONT):
-        fm.fontManager.addfont(_BUNDLED_FONT)
-        _ko_font = fm.FontProperties(fname=_BUNDLED_FONT).get_name()
-    else:
-        # 2순위: 시스템 설치 폰트 (로컬 개발 환경 등)
-        _KO_FONT_CANDIDATES = [
-            "Apple SD Gothic Neo", "Nanum Gothic", "AppleGothic",
-            "Malgun Gothic", "NanumGothic", "Noto Sans CJK KR",
-        ]
-        _available = {f.name for f in fm.fontManager.ttflist}
-        _ko_font = next((f for f in _KO_FONT_CANDIDATES if f in _available), None)
-
-    if _ko_font:
-        matplotlib.rcParams["font.family"] = _ko_font
-    matplotlib.rcParams["axes.unicode_minus"] = False  # 마이너스 기호 깨짐 방지
-
-    _MATPLOTLIB_AVAILABLE = True
-except ImportError:
-    _MATPLOTLIB_AVAILABLE = False
+    from db.finance_db import DBWork
+    _DBWORK_AVAILABLE = True
+except Exception:
+    _DBWORK_AVAILABLE = False
 
 INDUSTRY_RATIO = {
     "CS100001": {  # 한식
@@ -78,55 +49,23 @@ INDUSTRY_RATIO = {
         "cost": 0.35, "salary": 0.20, "rent": 0.10, "admin": 0.03, "fee": 0.03,
     },
 }
-# 업종별 % 수치
+
 
 class FinanceSimulationPlugin:
     """몬테카를로 시뮬레이션 기반 재무 분석 플러그인"""
+
     def _calculate_salary(self, salary: float, hours: float = None) -> float:
         return salary if hours is None else salary * hours
-    
+
     def get_industry_ratio(self, industry: str = None) -> dict:
         return INDUSTRY_RATIO.get(industry, INDUSTRY_RATIO["default"])
 
-    # def _generate_chart(self, results: list, avg: float, p20: float, loss_prob: float) -> str | None:
-        """몬테카를로 결과 히스토그램을 base64 PNG로 반환. matplotlib 없으면 None."""
-        if not _MATPLOTLIB_AVAILABLE:
-            return None
-        try:
-            fig, ax = plt.subplots(figsize=(7, 4))
-            arr = np.array(results)
-
-            ax.hist(arr, bins=60, color="#4e8cff", alpha=0.7, edgecolor="none")
-
-            # 손실 구간 강조
-            loss_vals = arr[arr < 0]
-            if len(loss_vals):
-                ax.hist(loss_vals, bins=60, color="#e74c3c", alpha=0.6, edgecolor="none")
-
-            ax.axvline(avg,  color="#2ecc71", linewidth=1.8, linestyle="--", label=f"평균: {avg/10000:,.0f}만원")
-            ax.axvline(p20,  color="#e67e22", linewidth=1.8, linestyle=":",  label=f"하위 20%: {p20/10000:,.0f}만원")
-            ax.axvline(0,    color="#e74c3c", linewidth=1.2, linestyle="-",  alpha=0.5)
-
-            ax.set_xlabel("월 순이익 (원)", fontsize=10)
-            ax.set_ylabel("빈도", fontsize=10)
-            ax.set_title(f"몬테카를로 시뮬레이션 (10,000회) — 손실 확률 {loss_prob:.1%}", fontsize=11)
-            ax.legend(fontsize=9)
-            ax.yaxis.set_visible(False)
-            plt.tight_layout()
-
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", dpi=100)
-            plt.close(fig)
-            buf.seek(0)
-            return base64.b64encode(buf.read()).decode("utf-8")
-        except Exception:
-            return None
-
     def _generate_chart(self, results: list, avg: float, p20: float) -> dict:
+        """몬테카를로 결과를 프론트엔드 chart.js용 JSON bins로 반환."""
         min_val, max_val = min(results), max(results)
         bin_count = 40
         bin_size = (max_val - min_val) / bin_count
-        
+
         bins = []
         for i in range(bin_count):
             left = min_val + i * bin_size
@@ -136,15 +75,15 @@ class FinanceSimulationPlugin:
                 "left":  round(left),
                 "right": round(right),
                 "count": count,
-                "type":  "loss" if left < 0 else "p20" if left < p20 else "profit"
+                "type":  "loss" if left < 0 else "p20" if left < p20 else "profit",
             })
-        
+
         return {
-            "bins":     bins,
-            "avg":      round(avg),
-            "p20":      round(p20),
-            "min":      round(min_val),
-            "max":      round(max_val),
+            "bins": bins,
+            "avg":  round(avg),
+            "p20":  round(p20),
+            "min":  round(min_val),
+            "max":  round(max_val),
         }
 
     @kernel_function(
@@ -179,7 +118,6 @@ class FinanceSimulationPlugin:
         if fee    is None: fee    = avg_sales * ratio["fee"]
 
         salary_cost = self._calculate_salary(salary, hours)
-        # 시급 관련 연산
 
         if len(revenue) == 1:
             for _ in range(iterations):
@@ -189,22 +127,21 @@ class FinanceSimulationPlugin:
                 results.append(net)
         else:
             for _ in range(iterations):
-                sim_rev = random.choice(revenue)* random.gauss(1.0, 0.1)
+                sim_rev = random.choice(revenue) * random.gauss(1.0, 0.1)
                 sim_cost = random.gauss(cost, cost * 0.1)
                 net = sim_rev - sim_cost - salary_cost - rent - admin - fee
                 results.append(net)
 
         avg = sum(results) / iterations
         loss_prob = sum(1 for r in results if r < 0) / iterations
-        
+
         sorted_results = sorted(results)
         loss_results = [r for r in results if r < 0]
         avg_loss = round(sum(loss_results) / len(loss_results)) if loss_results else 0
 
         p20 = sorted_results[int(iterations * 0.20)]
-        # [PR#51 수정] chart_b64 dead-code 호출 제거
-        #   아래의 chart = self._generate_chart(results, avg, p20, loss_prob) 가 실제 사용됨
         chart = self._generate_chart(results, avg, p20)
+
         return {
             "average_net_profit": round(avg),
             "loss_probability":   round(loss_prob, 4),
@@ -215,7 +152,7 @@ class FinanceSimulationPlugin:
             "actual_rent":        round(rent),
             "actual_admin":       round(admin),
             "actual_fee":         round(fee),
-            "chart":              chart,  # base64 PNG 또는 None
+            "chart":              chart,
         }
 
     @kernel_function(
@@ -231,12 +168,7 @@ class FinanceSimulationPlugin:
         months = math.ceil(initial_investment / avg_profit)
         return {"recoverable": True, "months": months}
 
-    # @kernel_function(
-    #     name="breakeven_analysis",
-    #     description="고정비와 변동비율을 입력받아 손익분기점 매출을 계산합니다."
-    # )
     def breakeven_analysis(self, fixed_cost: float, variable_cost_ratio: float) -> dict:
-        # 단순계산
         breakeven_revenue = fixed_cost / (1 - variable_cost_ratio)
         return {
             "breakeven_revenue": round(breakeven_revenue),
@@ -249,14 +181,11 @@ class FinanceSimulationPlugin:
         avg_net_profit: float,
         variable_cost: float,
     ) -> dict:
-        # MC 역산
         avg_total_cost = avg_revenue - avg_net_profit
         variable_cost_ratio = variable_cost / avg_revenue
         fixed_cost = avg_total_cost - variable_cost
-
         breakeven_revenue = fixed_cost / (1 - variable_cost_ratio)
         safety_margin = (avg_revenue - breakeven_revenue) / avg_revenue
-
         return {
             "breakeven_revenue": round(breakeven_revenue),
             "breakeven_daily":   round(breakeven_revenue / 30),
@@ -264,15 +193,19 @@ class FinanceSimulationPlugin:
         }
 
     def load_initial(self, region: str = None, industry: str = None) -> dict:
-        """지역/업종 코드를 받아 매충 데이터를 불러옵니다."""
-        dbwork = DBWork()
-        if region is None and industry is None:
-            # 지역/업종 입력 없는 경우 전체 평균
-            revenue = dbwork.get_average_sales()
+        """지역/업종 코드를 받아 매출 데이터를 불러옵니다."""
+        if _DBWORK_AVAILABLE:
+            try:
+                dbwork = DBWork()
+                if region is None and industry is None:
+                    revenue = dbwork.get_average_sales()
+                else:
+                    revenue = dbwork.get_sales(region, industry)
+            except Exception:
+                revenue = [14000000]
         else:
-            # 하나라도 있으면 리스트 반환
-            revenue = dbwork.get_sales(region, industry)
-        
+            revenue = [14000000]
+
         return {
             "revenue": revenue,
             "cost": None,
@@ -281,14 +214,11 @@ class FinanceSimulationPlugin:
             "rent": None,
             "admin": None,
             "fee": None,
-            "initial_investment": None
+            "initial_investment": None,
         }
 
     def merge_json(self, previous: dict, current: dict) -> dict:
-        """
-        기존 JSON(previous)에 새 입력(current)을 병합.
-        current에 값이 있으면 덮어쓰고, 없으면 previous 유지.
-        """
+        """기존 JSON(previous)에 새 입력(current)을 병합."""
         merged = previous.copy()
         for key, value in current.items():
             if value is not None:

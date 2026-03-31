@@ -32,6 +32,7 @@ async def run(
     question: str,
     profile: str = "",
     session_id: str = "",
+    prior_history: list[dict] | None = None,
     max_retries: int = 3,
     current_params: dict | None = None,
 ) -> dict:
@@ -47,6 +48,8 @@ async def run(
 
     chart = None
     updated_params = None
+    adm_codes: list = []
+    analysis_type: str = ""
 
     for attempt in range(1, max_retries + 2):
         # ── 에이전트 호출 (타이밍 측정) ─────────────────────
@@ -56,15 +59,18 @@ async def run(
             question=question,
             retry_prompt=retry_prompt,
             profile=profile,
+            prior_history=prior_history,
             **extra,
         )
         agent_ms = round((time.monotonic() - t_agent) * 1000)
 
-        # finance 에이전트는 dict를 반환 (draft + chart + updated_params)
+        # finance/location 에이전트는 dict를 반환
         if isinstance(raw, dict):
             draft = raw.get("draft", "")
             chart = raw.get("chart")
             updated_params = raw.get("updated_params")
+            adm_codes = raw.get("adm_codes", [])
+            analysis_type = raw.get("type", "")
         else:
             draft = raw
 
@@ -100,6 +106,8 @@ async def run(
                 "draft":            draft,
                 "chart":            chart,
                 "updated_params":   updated_params,
+                "adm_codes":        adm_codes,
+                "analysis_type":    analysis_type,
             }
 
         rejection_history.append({
@@ -113,21 +121,24 @@ async def run(
         if attempt > max_retries:
             break
 
+    actual_retries = len(rejection_history)
+    last_reason = rejection_history[-1]["verdict"].get("retry_prompt", "") if rejection_history else ""
     return {
         "status":           "escalated",
         "grade":            "C",
         "confidence_note":  "",
-        "retry_count":      max_retries,
+        "retry_count":      actual_retries,
         "request_id":       request_id,
         "session_id":       session_id,
         "agent_ms":         0,
         "signoff_ms":       0,
-        "message":          f"재시도 {max_retries}회 초과. 마지막 거부 이유: "
-                            f"{rejection_history[-1]['verdict'].get('retry_prompt', '')}",
+        "message":          f"재시도 {actual_retries}회 초과. 마지막 거부 이유: {last_reason}",
         "rejection_history": rejection_history,
         "draft":            draft,
         "chart":            chart,
         "updated_params":   updated_params,
+        "adm_codes":        adm_codes,
+        "analysis_type":    analysis_type,
     }
 
 
@@ -136,6 +147,7 @@ async def run_stream(
     question: str,
     profile: str = "",
     session_id: str = "",
+    prior_history: list[dict] | None = None,
     max_retries: int = 3,
     current_params: dict | None = None,
 ) -> AsyncGenerator[dict, None]:
@@ -161,6 +173,8 @@ async def run_stream(
     prev_draft = None
     chart = None
     updated_params = None
+    adm_codes: list = []
+    analysis_type: str = ""
 
     for attempt in range(1, max_retries + 2):
         yield {"event": "agent_start", "attempt": attempt, "max_attempts": max_retries + 1}
@@ -171,6 +185,7 @@ async def run_stream(
             question=question,
             retry_prompt=retry_prompt,
             profile=profile,
+            prior_history=prior_history,
             **extra,
         )
         agent_ms = round((time.monotonic() - t_agent) * 1000)
@@ -179,6 +194,8 @@ async def run_stream(
             draft = raw.get("draft", "")
             chart = raw.get("chart")
             updated_params = raw.get("updated_params")
+            adm_codes = raw.get("adm_codes", [])
+            analysis_type = raw.get("type", "")
         else:
             draft = raw
 
@@ -228,6 +245,8 @@ async def run_stream(
                 "draft":            draft,
                 "chart":            chart,
                 "updated_params":   updated_params,
+                "adm_codes":        adm_codes,
+                "analysis_type":    analysis_type,
             }
             return
 
@@ -242,19 +261,22 @@ async def run_stream(
         if attempt > max_retries:
             break
 
+    actual_retries = len(rejection_history)
     yield {
         "event":            "complete",
         "status":           "escalated",
         "grade":            "C",
         "confidence_note":  "",
-        "retry_count":      max_retries,
+        "retry_count":      actual_retries,
         "request_id":       request_id,
         "session_id":       session_id,
         "agent_ms":         0,
         "signoff_ms":       0,
-        "message":          f"재시도 {max_retries}회 초과.",
+        "message":          f"재시도 {actual_retries}회 초과.",
         "rejection_history": rejection_history,
         "draft":            draft,
         "chart":            chart,
         "updated_params":   updated_params,
+        "adm_codes":        adm_codes,
+        "analysis_type":    analysis_type,
     }
