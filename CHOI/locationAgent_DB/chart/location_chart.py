@@ -286,9 +286,10 @@ def generate_compare_charts(
     business_type: str = "",
 ) -> list[str]:
     """
-    다중 지역 비교 — 차트 2개를 개별 base64 PNG 리스트로 반환
-      [0] 매출 비교 그룹 막대
-      [1] 점포 지표 비교 그룹 막대
+    다중 지역 비교 — 차트 3개를 개별 base64 PNG 리스트로 반환
+      [0] 지역별 월매출 비교 막대
+      [1] 점포당 평균 매출 비교 막대 (데이터 있을 때만)
+      [2] 점포 지표 비교 막대 (개업률/폐업률, 데이터 있을 때만)
     """
     if not _MATPLOTLIB_AVAILABLE or not compare_data:
         return []
@@ -302,27 +303,50 @@ def generate_compare_charts(
         title = f"{business_type} 지역 비교" if business_type else "지역 비교"
         charts = []
 
-        # ── 차트1: 매출 비교 ────────────────────────────────
+        monthly = [d.get("monthly_sales_raw", 0) for d in compare_data]
+        avg_store = [d.get("avg_per_store_raw", 0) for d in compare_data]
+
+        # ── 차트1: 월매출 비교 ──────────────────────────────
         try:
             fig, ax = plt.subplots(figsize=(9, 5))
             fig.suptitle(title, fontsize=13, fontweight="bold")
 
-            monthly = [d.get("monthly_sales_raw", 0) for d in compare_data]
-            avg_store = [d.get("avg_per_store_raw", 0) for d in compare_data]
-
-            bars1 = ax.bar(x - w / 2, monthly, w, label="월매출", color=loc_colors, alpha=0.85)
-            bars2 = ax.bar(x + w / 2, avg_store, w, label="점포당 평균",
-                           color=loc_colors, alpha=0.45, hatch="//")
+            bars1 = ax.bar(x, monthly, width=0.5, color=loc_colors, alpha=0.85)
 
             ax.set_xticks(x)
             ax.set_xticklabels(locations, fontsize=13)
             ax.yaxis.set_major_formatter(FuncFormatter(_억만_formatter))
-            ax.set_title("💰 매출 비교", fontsize=13, fontweight="bold", pad=8)
-            ax.legend(fontsize=10)
+            ax.set_title("💰 지역별 월매출 비교", fontsize=13, fontweight="bold", pad=8)
             ax.spines[["top", "right"]].set_visible(False)
 
-            for bars in [bars1, bars2]:
-                for bar in bars:
+            for bar in bars1:
+                h = bar.get_height()
+                if h > 0:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2, h,
+                        _억만_label(h), ha="center", va="bottom", fontsize=9, color="#475569",
+                    )
+
+            plt.tight_layout()
+            charts.append(_fig_to_base64(fig))
+        except Exception:
+            pass
+
+        # ── 차트2: 점포당 평균 매출 비교 ────────────────────
+        try:
+            if any(v > 0 for v in avg_store):
+                fig, ax = plt.subplots(figsize=(9, 5))
+                fig.suptitle(title, fontsize=13, fontweight="bold")
+
+                bars2 = ax.bar(x, avg_store, width=0.5, color=loc_colors, alpha=0.85)
+
+                ax.set_xticks(x)
+                ax.set_xticklabels(locations, fontsize=13)
+                ax.yaxis.set_major_formatter(FuncFormatter(_억만_formatter))
+                ax.set_title("🏬 점포당 평균 매출 비교", fontsize=13, fontweight="bold", pad=8)
+                ax.spines[["top", "right"]].set_visible(False)
+
+                for bar in bars2:
                     h = bar.get_height()
                     if h > 0:
                         ax.text(
@@ -330,8 +354,8 @@ def generate_compare_charts(
                             _억만_label(h), ha="center", va="bottom", fontsize=9, color="#475569",
                         )
 
-            plt.tight_layout()
-            charts.append(_fig_to_base64(fig))
+                plt.tight_layout()
+                charts.append(_fig_to_base64(fig))
         except Exception:
             pass
 
