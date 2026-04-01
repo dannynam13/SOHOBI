@@ -1,7 +1,7 @@
 """
 정부지원사업 & 소상공인 금융지원 맞춤 추천 플러그인 (RAG)
 - Azure AI Search 인덱스: gov-programs-index
-- 데이터: 1,887건 (정부24 API + 중기부 공고 + 소진공 정책자금 + 신용보증 + 외식업 특화 + 지역 지자체)
+- 데이터: 5,600건+ (정부24 + 창업진흥원 4종 + 중소벤처24 + 기업마당 + 큐레이션)
 - 검색: 하이브리드 (BM25 키워드 + 벡터) + 시맨틱 랭커
 - 임베딩: text-embedding-3-large (3072차원)
 - 핵심: 단순 검색이 아닌 사용자 상황 기반 다중 카테고리 맞춤 추천
@@ -62,8 +62,9 @@ class GovSupportPlugin:
     def __init__(self):
         openai_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT", "")
         openai_key = os.getenv("AZURE_OPENAI_API_KEY", "")
-        search_key = os.getenv("AZURE_SEARCH_API_KEY", "") or os.getenv("AZURE_SEARCH_KEY", "")
+        search_key = os.getenv("AZURE_SEARCH_API_KEY") or os.getenv("AZURE_SEARCH_KEY", "")
         search_endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+        search_index = os.getenv("AZURE_SEARCH_INDEX_NAME") or os.getenv("AZURE_SEARCH_INDEX", "gov-programs-index")
         self._embedding_deployment = os.getenv(
             "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
             os.getenv("AZURE_EMBEDDING_DEPLOYMENT", "text-embedding-3-large")
@@ -78,7 +79,7 @@ class GovSupportPlugin:
             )
             self._search_client = SearchClient(
                 endpoint=search_endpoint,
-                index_name=os.getenv("AZURE_SEARCH_INDEX_NAME", "gov-programs-index"),
+                index_name=search_index,
                 credential=AzureKeyCredential(search_key),
             )
 
@@ -129,44 +130,44 @@ class GovSupportPlugin:
     )
     def recommend_programs(
         self,
-        업종: Annotated[str, "사용자 업종 (예: 카페, 음식점, 베이커리, 식품제조). 모르면 '미정'"],
-        지역: Annotated[str, "사용자 지역 (예: 서울, 경기, 부산). 모르면 빈 문자열"],
-        창업단계: Annotated[str, "예비창업/초기창업(3년이내)/운영중/폐업예정/재창업. 모르면 '미정'"],
-        직원수: Annotated[str, "현재 또는 예상 직원수 (예: 0명, 3명, 10명). 모르면 '미정'"] = "미정",
-        필요자금: Annotated[str, "필요한 자금 규모 (예: 3천만원, 1억). 모르면 '미정'"] = "미정",
-        자금용도: Annotated[str, "자금 용도 (예: 인테리어, 운전자금, 장비구매). 모르면 '미정'"] = "미정",
-        추가정보: Annotated[str, "기타 사용자 상황 (예: 폐업 경험 있음, 청년, 여성 등). 없으면 빈 문자열"] = "",
+        business_type: Annotated[str, "사용자 업종 (예: 카페, 음식점, 베이커리, 식품제조). 모르면 '미정'"],
+        region: Annotated[str, "사용자 지역 (예: 서울, 경기, 부산). 모르면 빈 문자열"],
+        startup_stage: Annotated[str, "예비창업/초기창업(3년이내)/운영중/폐업예정/재창업. 모르면 '미정'"],
+        employee_count: Annotated[str, "현재 또는 예상 직원수 (예: 0명, 3명, 10명). 모르면 '미정'"] = "미정",
+        funding_needed: Annotated[str, "필요한 자금 규모 (예: 3천만원, 1억). 모르면 '미정'"] = "미정",
+        funding_purpose: Annotated[str, "자금 용도 (예: 인테리어, 운전자금, 장비구매). 모르면 '미정'"] = "미정",
+        additional_info: Annotated[str, "기타 사용자 상황 (예: 폐업 경험 있음, 청년, 여성 등). 없으면 빈 문자열"] = "",
     ) -> str:
         if not self._available:
             return "추천 서비스가 설정되지 않았습니다. (AZURE_SEARCH_API_KEY, AZURE_SEARCH_ENDPOINT 확인)"
 
         try:
-            if not 지역:
-                지역 = ""
-            region = self._extract_region(지역) if 지역 else ""
+            if not region:
+                region = ""
+            extracted_region = self._extract_region(region) if region else ""
 
             profile = {
-                "업종": 업종 if 업종 != "미정" else "소상공인",
-                "지역": 지역 or "전국",
-                "창업단계": 창업단계 if 창업단계 != "미정" else "",
-                "직원수": 직원수 if 직원수 != "미정" else "",
-                "자금용도": 자금용도 if 자금용도 != "미정" else "운전자금",
+                "업종": business_type if business_type != "미정" else "소상공인",
+                "지역": region or "전국",
+                "창업단계": startup_stage if startup_stage != "미정" else "",
+                "직원수": employee_count if employee_count != "미정" else "",
+                "자금용도": funding_purpose if funding_purpose != "미정" else "운전자금",
             }
 
             profile_summary = (
                 f"[사용자 프로필] 업종: {profile['업종']}, 지역: {profile['지역']}, "
-                f"단계: {profile['창업단계'] or '미정'}, 직원: {직원수}, "
-                f"필요자금: {필요자금}, 용도: {자금용도}"
+                f"단계: {profile['창업단계'] or '미정'}, 직원: {employee_count}, "
+                f"필요자금: {funding_needed}, 용도: {funding_purpose}"
             )
-            if 추가정보:
-                profile_summary += f", 기타: {추가정보}"
+            if additional_info:
+                profile_summary += f", 기타: {additional_info}"
 
             all_results = {}
             seen_names = set()
 
             for cat in RECOMMEND_CATEGORIES:
                 query = cat["query_template"].format(**profile)
-                results = self._search_one(query, region, top_k=5)
+                results = self._search_one(query, extracted_region, top_k=5)
 
                 cat_results = []
                 for r in results:
