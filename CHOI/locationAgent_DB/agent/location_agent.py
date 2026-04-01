@@ -259,8 +259,14 @@ class LocationAgent:
         # ── 차트 생성 (sales_summary 기반) ──────────────────
         chart_b64 = []
         if sales_data:
+            # __adm_XXXXXXXX / __nm_XXX 같은 임시 키는 실제 동이름으로 대체
+            if location.startswith("__") and sales_data.get("breakdown"):
+                adm_names = list({b["adm_name"] for b in sales_data["breakdown"]})
+                display_location = adm_names[0] if len(adm_names) == 1 else " · ".join(sorted(adm_names))
+            else:
+                display_location = location
             chart_b64 = generate_analyze_charts(
-                sales_data["summary"], location, business_type,
+                sales_data["summary"], display_location, business_type,
             )
 
         return {
