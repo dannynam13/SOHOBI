@@ -1,5 +1,5 @@
 # 위치: p01_backEnd/mapController.py
-# 실행: uvicorn mapController:app --host=0.0.0.0 --port=8681 --reload
+# 실행: python -m uvicorn mapController:app --host=0.0.0.0 --port=8681 --reload
 
 import csv, os, sys, httpx, asyncio, logging
 from contextlib import asynccontextmanager
@@ -11,39 +11,53 @@ sys.path.insert(0, os.path.join(BASE_DIR, "DAO"))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from DAO.mapInfoDAO import MapInfoDAO, SIDO_BOUNDS, _get_df
+from DAO.landmarkDAO import LandmarkDAO
+from DAO.populationDAO import PopulationDAO
 
+# ── 서버 로그 설정 ───────────────────────────────────────────────
+# INFO 레벨 이상 로그를 터미널에 출력
+# 형식: 2026-03-16 12:00:00,000 INFO [sangkwon] adm_cd=...
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+import math as _math
+
+
+def _clean(obj):
+    """NaN/Inf → None 변환 (JSON 직렬화 오류 방지)"""
+    if isinstance(obj, float) and (_math.isnan(obj) or _math.isinf(obj)):
+        return None
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean(v) for v in obj]
+    return obj
+
+
 mDAO = MapInfoDAO()
+lmDAO = LandmarkDAO()
+popDAO = PopulationDAO()
 
 # ── 시도명 → 테이블명 ───────────────────────────────────────────
-SIDO_TABLE_MAP = {k.replace("소상공인_", ""): k for k in SIDO_BOUNDS}
+SIDO_TABLE_MAP = {k.replace("STORE_", ""): k for k in SIDO_BOUNDS}
 
-PRELOAD_TABLES = [
-    "소상공인_서울", "소상공인_경기", "소상공인_인천",
-    "소상공인_부산", "소상공인_대구",
-]
-
-
-async def _preload_caches():
-    for table in PRELOAD_TABLES:
-        try:
-            await asyncio.get_event_loop().run_in_executor(None, _get_df, table)
-            logger.info(f"[startup] 캐시 완료: {table}")
-        except Exception as e:
-            logger.warning(f"[startup] 캐시 실패 ({table}): {e}")
+# 서울만 로드 (현재 서울 상권 분석에 집중)
+PRELOAD_TABLES = ["STORE_SEOUL"]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("[startup] 소상공인_서울 캐시 로드...")
-    try:
-        await asyncio.get_event_loop().run_in_executor(None, _get_df, "소상공인_서울")
-        logger.info("[startup] 소상공인_서울 ✓")
-    except Exception as e:
-        logger.warning(f"[startup] 서울 캐시 실패: {e}")
-    asyncio.create_task(_preload_caches())
+    # 서버 먼저 띄우고 백그라운드에서 캐시 로드
+    async def _load():
+        for table in PRELOAD_TABLES:
+            try:
+                logger.info(f"[startup] {table} 캐시 로드...")
+                await asyncio.get_event_loop().run_in_executor(None, _get_df, table)
+                logger.info(f"[startup] {table} ✓")
+            except Exception as e:
+                logger.warning(f"[startup] 캐시 실패 ({table}): {e}")
+
+    asyncio.create_task(_load())
     yield
     logger.info("[shutdown] 서버 종료")
 
@@ -52,9 +66,11 @@ app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:3000",
         "http://localhost:5173",
-        "http://192.168.9.168:5173",
-        "http://195.168.9.169:5173",
+        "http://10.1.92.100:3000",
+        "http://192.168.9.4:5173",
+        "http://195.168.9.5:5173",
     ],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,7 +85,7 @@ LAND_USE_COLORS = {
     "일반상업지역": {"bg": "#DBEAFE", "text": "#2563EB", "level": 3},
     "근린상업지역": {"bg": "#EFF6FF", "text": "#3B82F6", "level": 2},
     "유통상업지역": {"bg": "#EFF6FF", "text": "#3B82F6", "level": 2},
-    "준주거지역":   {"bg": "#F0F9FF", "text": "#0284C7", "level": 2},
+    "준주거지역": {"bg": "#F0F9FF", "text": "#0284C7", "level": 2},
     "제1종전용주거지역": {"bg": "#F5F5F5", "text": "#888", "level": 0},
     "제2종전용주거지역": {"bg": "#F5F5F5", "text": "#888", "level": 0},
     "제1종일반주거지역": {"bg": "#F5F5F5", "text": "#777", "level": 0},
@@ -77,7 +93,7 @@ LAND_USE_COLORS = {
     "제3종일반주거지역": {"bg": "#F5F5F5", "text": "#777", "level": 0},
     "전용공업지역": {"bg": "#FFF7ED", "text": "#C2410C", "level": 1},
     "일반공업지역": {"bg": "#FFF7ED", "text": "#EA580C", "level": 1},
-    "준공업지역":   {"bg": "#FFF7ED", "text": "#F97316", "level": 1},
+    "준공업지역": {"bg": "#FFF7ED", "text": "#F97316", "level": 1},
     "보전녹지지역": {"bg": "#F0FDF4", "text": "#16A34A", "level": 0},
     "생산녹지지역": {"bg": "#F0FDF4", "text": "#16A34A", "level": 0},
     "자연녹지지역": {"bg": "#F0FDF4", "text": "#22C55E", "level": 1},
@@ -88,17 +104,62 @@ LAND_USE_COLORS = {
 # 1. 상권 조회
 # ════════════════════════════════════════════════════════════════
 
+
 @app.get("/map/nearby")
 def getNearbyStores(
-    lat: float, lng: float,
-    radius: float = 500, limit: int = 500,
+    lat: float,
+    lng: float,
+    radius: float = 500,
+    limit: int = 500,
     category: Optional[str] = None,
 ):
     try:
-        result = mDAO.getNearbyByCategory(lat, lng, category, radius, limit) \
-                 if category else mDAO.getNearbyStores(lat, lng, radius, limit)
-        return {"count": len(result), "stores": result}
+        result = (
+            mDAO.getNearbyByCategory(lat, lng, category, radius, limit)
+            if category
+            else mDAO.getNearbyStores(lat, lng, radius, limit)
+        )
+        return {"count": len(result), "stores": _clean(result)}
     except Exception as e:
+        return {"error": str(e), "count": 0, "stores": []}
+
+
+@app.get("/map/nearby-bbox")
+def getNearbyInBbox(
+    min_lng: float,
+    min_lat: float,
+    max_lng: float,
+    max_lat: float,
+    limit: int = 1000,
+):
+    """
+    폴리곤 bbox(EPSG:4326) 내 소상공인 조회
+    프론트: feature.getGeometry().getExtent() → toLonLat 변환 후 전달
+    """
+    try:
+        import math
+
+        center_lat = (min_lat + max_lat) / 2
+        center_lng = (min_lng + max_lng) / 2
+        lat_r = (max_lat - min_lat) / 2 * 111320
+        lng_r = (max_lng - min_lng) / 2 * 111320 * math.cos(math.radians(center_lat))
+        radius = max(lat_r, lng_r)
+        result = mDAO.getNearbyStores(center_lat, center_lng, radius, limit)
+        # bbox 안에 있는 것만 필터링
+        filtered = [
+            s
+            for s in result
+            if s.get("경도")
+            and s.get("위도")
+            and min_lng <= float(s["경도"]) <= max_lng
+            and min_lat <= float(s["위도"]) <= max_lat
+        ]
+        logger.info(
+            f"[nearby-bbox] 반경={radius:.0f}m 전체={len(result)} bbox필터={len(filtered)}"
+        )
+        return {"count": len(filtered), "stores": filtered}
+    except Exception as e:
+        logger.error(f"[nearby-bbox] {e}")
         return {"error": str(e), "count": 0, "stores": []}
 
 
@@ -108,6 +169,186 @@ def getCategories():
         return {"categories": mDAO.getCategories()}
     except Exception as e:
         return {"error": str(e), "categories": []}
+
+
+@app.get("/map/landmarks")
+def getLandmarks(
+    lat: float = None,
+    lng: float = None,
+    adm_cd: str = None,
+    radius: float = 1.0,
+    types: str = "",  # "12,14" 형식
+):
+    """랜드마크 DB 조회 - 좌표/행정동코드/전체(서울)"""
+    try:
+        type_list = (
+            [t.strip() for t in types.split(",") if t.strip()] if types else None
+        )
+        if lat and lng:
+            result = lmDAO.get_nearby(lat, lng, radius)
+        elif adm_cd:
+            result = lmDAO.get_by_adm_cd(adm_cd, type_list)
+        else:
+            # adm_cd 없으면 서울 전체 조회
+            result = lmDAO.get_all(type_list)
+        if type_list and adm_cd:
+            result = [r for r in result if str(r["content_type_id"]) in type_list]
+        return {"count": len(result), "landmarks": result}
+    except Exception as e:
+        logger.error(f"[landmarks] {e}")
+        return {"count": 0, "landmarks": [], "error": str(e)}
+
+
+@app.get("/map/festivals")
+async def getFestivals(
+    adm_cd: str = None,
+    lat: float = None,
+    lng: float = None,
+):
+    """축제(15) 실시간 API 조회"""
+    import httpx as _httpx
+
+    KTO_KEY = os.getenv(
+        "KTO_GW_INFO_KEY",
+        "b7906dd729da8d6d4f67bd6bed484f032f9f586abc7b382b41b93a003949385e",
+    )
+    sgg_cd = adm_cd[:5] if adm_cd else None
+    try:
+        from datetime import datetime, timedelta
+
+        today = datetime.now()
+        date_from = today.strftime("%Y%m%d")
+        date_to = (today + timedelta(days=90)).strftime("%Y%m%d")
+        params = {
+            "serviceKey": KTO_KEY,
+            "numOfRows": 100,
+            "pageNo": 1,
+            "MobileOS": "ETC",
+            "MobileApp": "SOHOBI",
+            "areaCode": "1",
+            "contentTypeId": "15",
+            "eventStartDate": date_from,
+            "eventEndDate": date_to,
+            "_type": "xml",
+        }
+        if sgg_cd:
+            params["sigunguCode"] = sgg_cd
+        async with _httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://apis.data.go.kr/B551011/KorService2/areaBasedList2",
+                params=params,
+                timeout=10,
+            )
+        import xml.etree.ElementTree as ET
+
+        root = ET.fromstring(r.text)
+        items = root.findall(".//item")
+        result = [
+            {
+                "content_id": (item.findtext("contentid") or "").strip(),
+                "title": (item.findtext("title") or "").strip(),
+                "addr": (item.findtext("addr1") or "").strip(),
+                "lng": float(item.findtext("mapx") or 0) or None,
+                "lat": float(item.findtext("mapy") or 0) or None,
+                "image": (item.findtext("firstimage") or "").strip() or None,
+                "start_date": (item.findtext("eventstartdate") or "").strip(),
+                "end_date": (item.findtext("eventenddate") or "").strip(),
+            }
+            for item in items
+        ]
+        return {"count": len(result), "festivals": result}
+    except Exception as e:
+        logger.error(f"[festivals] {e}")
+        return {"count": 0, "festivals": [], "error": str(e)}
+
+
+@app.get("/map/schools")
+def getSchools(
+    adm_cd: str = None,
+    sgg_nm: str = "",
+    school_type: str = "",
+):
+    """학교 정보 조회 - sgg_nm 없으면 전체"""
+    try:
+        if adm_cd and not sgg_nm:
+            # adm_cd → 구이름 변환
+            gu = (
+                mDAO.get_gu_nm_by_adm_cd(adm_cd)
+                if hasattr(mDAO, "get_gu_nm_by_adm_cd")
+                else ""
+            )
+            sgg_nm = gu or ""
+        result = lmDAO.get_schools_by_sgg(sgg_nm, school_type or None)
+        return {"count": len(result), "schools": result}
+    except Exception as e:
+        logger.error(f"[schools] {e}")
+        return {"count": 0, "schools": [], "error": str(e)}
+
+
+@app.get("/map/sdot/sensors")
+def getSdotSensors():
+    """S-DoT 유동인구 센서 위치 목록"""
+    try:
+        from DAO.baseDAO import BaseDAO
+
+        class _DAO(BaseDAO):
+            pass
+
+        dao = _DAO()
+        rows = dao._query(
+            "SELECT SEQ, SENSOR_CD, SERIAL_NO, ADDR, LAT, LNG FROM SDOT_SENSOR ORDER BY SEQ",
+            [],
+        )
+        data = [
+            {
+                "seq": r[0],
+                "sensor_cd": r[1],
+                "serial_no": r[2],
+                "addr": r[3],
+                "lat": float(r[4]) if r[4] else None,
+                "lng": float(r[5]) if r[5] else None,
+            }
+            for r in rows
+            if r[4] and r[5]
+        ]
+        logger.info(f"[sdot/sensors] {len(data)}건")
+        return {"count": len(data), "sensors": data}
+    except Exception as e:
+        logger.error(f"[sdot/sensors] {e}")
+        # 컬럼명 오류 시 빈 배열 반환 (지도 로드 차단 방지)
+        return {"count": 0, "sensors": []}
+
+
+@app.get("/map/population/places")
+def getPopPlaces():
+    """유동인구 장소 목록 + 좌표"""
+    places = popDAO.get_places()
+    return {"count": len(places), "places": places}
+
+
+@app.get("/map/population/all")
+async def getAllPopulation():
+    """전체 장소 혼잡도 병렬 조회 (5분 캐시)"""
+    try:
+        data = await popDAO.fetch_all()
+        logger.info(f"[population/all] {len(data)}개 장소")
+        return {"count": len(data), "data": data}
+    except Exception as e:
+        logger.error(f"[population/all] {e}")
+        return {"count": 0, "data": [], "error": str(e)}
+
+
+@app.get("/map/population/place")
+async def getPlacePopulation(name: str):
+    """단일 장소 상세 조회 (예측 포함)"""
+    try:
+        result = await popDAO.fetch_one(name)
+        if not result:
+            return {"error": f"'{name}' 조회 실패"}
+        return result
+    except Exception as e:
+        logger.error(f"[population/place] {e}")
+        return {"error": str(e)}
 
 
 @app.get("/map/dong-density")
@@ -122,15 +363,19 @@ async def getDongDensity(sido: str, sigg: str, dong: str):
 # 2. CSV 적재
 # ════════════════════════════════════════════════════════════════
 
+
 def _open_csv(filepath):
     for enc in ["utf-8-sig", "cp949", "euc-kr"]:
         try:
             f = open(filepath, encoding=enc)
-            f.read(512); f.seek(0)
+            f.read(512)
+            f.seek(0)
             return f, enc
         except Exception:
-            try: f.close()
-            except: pass
+            try:
+                f.close()
+            except:
+                pass
     return open(filepath, encoding="cp949", errors="ignore"), "cp949(fallback)"
 
 
@@ -141,9 +386,15 @@ def getCsvList():
     files = sorted(f for f in os.listdir(CSV_DIR) if f.endswith(".csv"))
     return {
         "count": len(files),
-        "files": [{"filename": f, "target_table": SIDO_TABLE_MAP.get(
-            next((k for k in SIDO_TABLE_MAP if k in f), ""), "❌ 매핑 없음"
-        )} for f in files],
+        "files": [
+            {
+                "filename": f,
+                "target_table": SIDO_TABLE_MAP.get(
+                    next((k for k in SIDO_TABLE_MAP if k in f), ""), "❌ 매핑 없음"
+                ),
+            }
+            for f in files
+        ],
     }
 
 
@@ -165,7 +416,8 @@ def loadCSV(filename: str):
             next(reader)  # 헤더 skip
             for row in reader:
                 if len(row) < 39:
-                    skip += 1; continue
+                    skip += 1
+                    continue
                 try:
                     record = (
                         *[row[i].strip() for i in range(37)],
@@ -175,14 +427,21 @@ def loadCSV(filename: str):
                     batch.append(record)
                     if len(batch) >= BATCH:
                         mDAO.insertBatch(batch, table_name)
-                        total += len(batch); batch = []
+                        total += len(batch)
+                        batch = []
                 except (ValueError, IndexError):
                     skip += 1
         if batch:
             mDAO.insertBatch(batch, table_name)
             total += len(batch)
-        return {"message": "완료", "file": filename, "table": table_name,
-                "encoding": enc, "inserted": total, "skipped": skip}
+        return {
+            "message": "완료",
+            "file": filename,
+            "table": table_name,
+            "encoding": enc,
+            "inserted": total,
+            "skipped": skip,
+        }
     except Exception as e:
         return {"error": str(e), "file": filename}
 
@@ -204,10 +463,13 @@ def loadAllCSV():
 # 3. 캐시 관리
 # ════════════════════════════════════════════════════════════════
 
+
 @app.get("/map/status")
 def getStatus():
-    try: return mDAO.getStatus()
-    except Exception as e: return {"error": str(e)}
+    try:
+        return mDAO.getStatus()
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.post("/map/reload-cache")
@@ -226,6 +488,7 @@ async def cacheStatus():
 #    → /realestate/wfs-dong (sig_cd 기반 전체) 사용
 # ════════════════════════════════════════════════════════════════
 
+
 @app.get("/map/land-use")
 async def getLandUse(pnu: str):
     """PNU로 용도지역 조회 (VWorld LURIS)"""
@@ -240,58 +503,75 @@ async def getLandUse(pnu: str):
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.get(url)
         features = (
-            res.json().get("response", {}).get("result", {})
-               .get("featureCollection", {}).get("features", [])
+            res.json()
+            .get("response", {})
+            .get("result", {})
+            .get("featureCollection", {})
+            .get("features", [])
         )
         if not features:
-            return {"용도지역명": "정보 없음", "level": 0,
-                    "color_bg": "#f5f5f5", "color_text": "#aaa"}
+            return {
+                "용도지역명": "정보 없음",
+                "level": 0,
+                "color_bg": "#f5f5f5",
+                "color_text": "#aaa",
+            }
         props = features[0].get("properties", {})
-        name  = props.get("prpos_area_dstrc_nm", "") or "정보 없음"
+        name = props.get("prpos_area_dstrc_nm", "") or "정보 없음"
         style = LAND_USE_COLORS.get(name, {"bg": "#f5f5f5", "text": "#666", "level": 1})
         return {
-            "용도지역명":  name,
+            "용도지역명": name,
             "용도지역코드": props.get("prpos_area_dstrc_cd", ""),
-            "용도지구명":  props.get("prpos_zone_nm", "") or None,
-            "용도구역명":  props.get("prpos_regn_nm", "") or None,
-            "level":      style["level"],
-            "color_bg":   style["bg"],
+            "용도지구명": props.get("prpos_zone_nm", "") or None,
+            "용도구역명": props.get("prpos_regn_nm", "") or None,
+            "level": style["level"],
+            "color_bg": style["bg"],
             "color_text": style["text"],
         }
     except Exception as e:
-        return {"error": str(e), "용도지역명": "조회 실패",
-                "level": 0, "color_bg": "#f5f5f5", "color_text": "#aaa"}
+        return {
+            "error": str(e),
+            "용도지역명": "조회 실패",
+            "level": 0,
+            "color_bg": "#f5f5f5",
+            "color_text": "#aaa",
+        }
 
 
 # ════════════════════════════════════════════════════════════════
 # 5. 동 중심좌표 (카카오)
 # ════════════════════════════════════════════════════════════════
 
+
 @app.get("/map/dong-centroids")
 async def getDongCentroids(gu: str, dongs: str):
     dong_list = [d.strip() for d in dongs.split(",") if d.strip()]
-    results   = []
+    results = []
     async with httpx.AsyncClient(timeout=10) as client:
         for dong in dong_list:
             query = f"서울 {gu} {dong}"
             try:
-                r    = await client.get(
+                r = await client.get(
                     "https://dapi.kakao.com/v2/local/search/address.json",
                     params={"query": query, "size": 1},
                     headers={"Authorization": f"KakaoAK {KAKAO_REST_KEY}"},
                 )
                 docs = r.json().get("documents", [])
                 if not docs:
-                    r2   = await client.get(
+                    r2 = await client.get(
                         "https://dapi.kakao.com/v2/local/search/keyword.json",
                         params={"query": query, "size": 1},
                         headers={"Authorization": f"KakaoAK {KAKAO_REST_KEY}"},
                     )
                     docs = r2.json().get("documents", [])
                 if docs:
-                    results.append({"dong": dong,
-                                    "lng": float(docs[0]["x"]),
-                                    "lat": float(docs[0]["y"])})
+                    results.append(
+                        {
+                            "dong": dong,
+                            "lng": float(docs[0]["x"]),
+                            "lat": float(docs[0]["y"]),
+                        }
+                    )
             except Exception as e:
                 logger.warning(f"[dong-centroids] {dong} 실패: {e}")
     return {"gu": gu, "count": len(results), "data": results}

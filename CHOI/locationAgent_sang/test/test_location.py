@@ -87,12 +87,22 @@ async def main():
     # await test_single("강남", "한식")
     # await test_single("잠실", "치킨")
 
+<<<<<<< HEAD
     # 미지원 지역 (에러 처리 확인)
     # await test_single("부산", "카페")
     # await test_single("홍대", "피자")  # 미지원 업종
 
     # 비교 케이스
     await test_compare(["홍대", "강남", "잠실"], "카페")
+=======
+    # 비교 케이스
+    await test_compare(["홍대", "강남", "잠실"], "카페")
+    
+    # 미지원 지역 (에러 처리 확인)
+    await test_single("부산", "카페")
+    await test_single("홍대", "피자")  # 미지원 업종
+
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
 
 
 if __name__ == "__main__":

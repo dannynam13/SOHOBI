@@ -5,43 +5,90 @@
      session_id / profile 파라미터 추가 (세션 컨텍스트 메모리)
      에이전트·Sign-off 별 타이밍 측정
      grade(A/B/C) 처리 추가
+<<<<<<< HEAD
+=======
+     run_stream(): SSE 스트리밍용 async generator 추가
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
 """
 
 import time
 import uuid
-from typing import Literal
+from typing import AsyncGenerator, Literal
 
-from kernel_setup import get_kernel
+from kernel_setup import get_kernel, get_signoff_client
 from agents.admin_agent import AdminAgent
 from agents.finance_agent import FinanceAgent
 from agents.legal_agent import LegalAgent
+from agents.location_agent import LocationAgent
 from signoff.signoff_agent import run_signoff
 
 AGENT_MAP = {
-    "admin":   AdminAgent,
-    "finance": FinanceAgent,
-    "legal":   LegalAgent,
+    "admin":    AdminAgent,
+    "finance":  FinanceAgent,
+    "legal":    LegalAgent,
+    "location": LocationAgent,
 }
 
 
 async def run(
-    domain: Literal["admin", "finance", "legal"],
+    domain: Literal["admin", "finance", "legal", "location", "chat"],
     question: str,
     profile: str = "",
     session_id: str = "",
+<<<<<<< HEAD
+=======
+    prior_history: list[dict] | None = None,
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
     max_retries: int = 3,
+    current_params: dict | None = None,
 ) -> dict:
     kernel = get_kernel()
+
+    # ── chat 도메인: SignOff 없이 즉시 반환 ──────────────────
+    if domain == "chat":
+        from agents.chat_agent import ChatAgent
+        t0 = time.monotonic()
+        draft = await ChatAgent(kernel).generate_draft(
+            question=question,
+            profile=profile,
+            prior_history=prior_history,
+        )
+        return {
+            "status":            "approved",
+            "grade":             "A",
+            "confidence_note":   "",
+            "retry_count":       0,
+            "request_id":        str(uuid.uuid4())[:8],
+            "session_id":        session_id,
+            "agent_ms":          round((time.monotonic() - t0) * 1000),
+            "signoff_ms":        0,
+            "message":           "",
+            "rejection_history": [],
+            "draft":             draft,
+            "chart":             None,
+            "updated_params":    None,
+            "adm_codes":         [],
+            "analysis_type":     "",
+        }
+
+    signoff_client = get_signoff_client()
     agent = AGENT_MAP[domain](kernel)
 
     request_id = str(uuid.uuid4())[:8]
     rejection_history = []
     retry_prompt = ""
     draft = ""
+    prev_draft = None
+
+    chart = None
+    updated_params = None
+    adm_codes: list = []
+    analysis_type: str = ""
 
     for attempt in range(1, max_retries + 2):
         # ── 에이전트 호출 (타이밍 측정) ─────────────────────
         t_agent = time.monotonic()
+<<<<<<< HEAD
         draft = await agent.generate_draft(
             question=question,
             retry_prompt=retry_prompt,
@@ -52,6 +99,36 @@ async def run(
         # ── Sign-off 호출 (타이밍 측정) ─────────────────────
         t_signoff = time.monotonic()
         verdict = await run_signoff(kernel=kernel, domain=domain, draft=draft)
+=======
+        extra = {"current_params": current_params} if domain == "finance" and current_params else {}
+        raw = await agent.generate_draft(
+            question=question,
+            retry_prompt=retry_prompt,
+            profile=profile,
+            prior_history=prior_history,
+            **extra,
+        )
+        agent_ms = round((time.monotonic() - t_agent) * 1000)
+
+        # finance/location 에이전트는 dict를 반환
+        if isinstance(raw, dict):
+            draft = raw.get("draft", "")
+            chart = raw.get("chart")
+            updated_params = raw.get("updated_params")
+            adm_codes = raw.get("adm_codes", [])
+            analysis_type = raw.get("type", "")
+        else:
+            draft = raw
+
+        # 이전 attempt와 draft가 동일하면 재시도해도 개선 불가 → 조기 종료
+        if draft == prev_draft:
+            break
+        prev_draft = draft
+
+        # ── Sign-off 호출 (타이밍 측정) ─────────────────────
+        t_signoff = time.monotonic()
+        verdict = await run_signoff(client=signoff_client, domain=domain, draft=draft)
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
         signoff_ms = round((time.monotonic() - t_signoff) * 1000)
 
         # issues 없이 approved=false → 모델 논리 오류, 강제 통과
@@ -74,6 +151,13 @@ async def run(
                 "message":          "",
                 "rejection_history": rejection_history,
                 "draft":            draft,
+<<<<<<< HEAD
+=======
+                "chart":            chart,
+                "updated_params":   updated_params,
+                "adm_codes":        adm_codes,
+                "analysis_type":    analysis_type,
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
             }
 
         rejection_history.append({
@@ -87,17 +171,207 @@ async def run(
         if attempt > max_retries:
             break
 
+    actual_retries = len(rejection_history)
+    last_reason = rejection_history[-1]["verdict"].get("retry_prompt", "") if rejection_history else ""
     return {
         "status":           "escalated",
         "grade":            "C",
         "confidence_note":  "",
+<<<<<<< HEAD
         "retry_count":      max_retries,
+=======
+        "retry_count":      actual_retries,
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
         "request_id":       request_id,
         "session_id":       session_id,
         "agent_ms":         0,
         "signoff_ms":       0,
+<<<<<<< HEAD
         "message":          f"재시도 {max_retries}회 초과. 마지막 거부 이유: "
                             f"{rejection_history[-1]['verdict'].get('retry_prompt', '')}",
         "rejection_history": rejection_history,
         "draft":            draft,
+=======
+        "message":          f"재시도 {actual_retries}회 초과. 마지막 거부 이유: {last_reason}",
+        "rejection_history": rejection_history,
+        "draft":            draft,
+        "chart":            chart,
+        "updated_params":   updated_params,
+        "adm_codes":        adm_codes,
+        "analysis_type":    analysis_type,
+    }
+
+
+async def run_stream(
+    domain: Literal["admin", "finance", "legal", "location", "chat"],
+    question: str,
+    profile: str = "",
+    session_id: str = "",
+    prior_history: list[dict] | None = None,
+    max_retries: int = 3,
+    current_params: dict | None = None,
+) -> AsyncGenerator[dict, None]:
+    """SSE 스트리밍용 async generator.
+    각 단계마다 event dict를 yield한다.
+
+    이벤트 종류:
+      agent_start    — 에이전트 호출 시작
+      agent_done     — 에이전트 draft 완료
+      signoff_start  — Sign-off 호출 시작
+      signoff_result — Sign-off 판정 결과 (통과/반려)
+      complete       — 전체 완료 (최종 결과 포함)
+      error          — 예외 발생
+    """
+    kernel = get_kernel()
+
+    # ── chat 도메인: SignOff 없이 즉시 complete yield ────────
+    if domain == "chat":
+        from agents.chat_agent import ChatAgent
+        yield {"event": "agent_start", "attempt": 1, "max_attempts": 1}
+        t0 = time.monotonic()
+        draft = await ChatAgent(kernel).generate_draft(
+            question=question,
+            profile=profile,
+            prior_history=prior_history,
+        )
+        agent_ms = round((time.monotonic() - t0) * 1000)
+        rid = str(uuid.uuid4())[:8]
+        yield {"event": "agent_done", "attempt": 1, "agent_ms": agent_ms}
+        yield {
+            "event":             "complete",
+            "status":            "approved",
+            "grade":             "A",
+            "confidence_note":   "",
+            "retry_count":       0,
+            "request_id":        rid,
+            "session_id":        session_id,
+            "agent_ms":          agent_ms,
+            "signoff_ms":        0,
+            "message":           "",
+            "rejection_history": [],
+            "draft":             draft,
+            "chart":             None,
+            "updated_params":    None,
+            "adm_codes":         [],
+            "analysis_type":     "",
+        }
+        return
+
+    signoff_client = get_signoff_client()
+    agent = AGENT_MAP[domain](kernel)
+
+    request_id = str(uuid.uuid4())[:8]
+    rejection_history = []
+    retry_prompt = ""
+    draft = ""
+    prev_draft = None
+    chart = None
+    updated_params = None
+    adm_codes: list = []
+    analysis_type: str = ""
+
+    for attempt in range(1, max_retries + 2):
+        yield {"event": "agent_start", "attempt": attempt, "max_attempts": max_retries + 1}
+
+        t_agent = time.monotonic()
+        extra = {"current_params": current_params} if domain == "finance" and current_params else {}
+        raw = await agent.generate_draft(
+            question=question,
+            retry_prompt=retry_prompt,
+            profile=profile,
+            prior_history=prior_history,
+            **extra,
+        )
+        agent_ms = round((time.monotonic() - t_agent) * 1000)
+
+        if isinstance(raw, dict):
+            draft = raw.get("draft", "")
+            chart = raw.get("chart")
+            updated_params = raw.get("updated_params")
+            adm_codes = raw.get("adm_codes", [])
+            analysis_type = raw.get("type", "")
+        else:
+            draft = raw
+
+        if draft == prev_draft:
+            break
+        prev_draft = draft
+
+        yield {"event": "agent_done", "attempt": attempt, "agent_ms": agent_ms}
+
+        yield {"event": "signoff_start", "attempt": attempt}
+
+        t_signoff = time.monotonic()
+        verdict = await run_signoff(client=signoff_client, domain=domain, draft=draft)
+        signoff_ms = round((time.monotonic() - t_signoff) * 1000)
+
+        if not verdict.get("issues") and not verdict.get("approved"):
+            verdict["approved"] = True
+            verdict["grade"] = "A"
+
+        grade = verdict.get("grade", "A" if verdict.get("approved") else "C")
+
+        yield {
+            "event":        "signoff_result",
+            "attempt":      attempt,
+            "approved":     verdict["approved"],
+            "grade":        grade,
+            "passed":       verdict.get("passed", []),
+            "issues":       verdict.get("issues", []),
+            "warnings":     verdict.get("warnings", []),
+            "retry_prompt": verdict.get("retry_prompt", ""),
+            "signoff_ms":   signoff_ms,
+        }
+
+        if verdict["approved"]:
+            yield {
+                "event":            "complete",
+                "status":           "approved",
+                "grade":            grade,
+                "confidence_note":  verdict.get("confidence_note", ""),
+                "retry_count":      attempt - 1,
+                "request_id":       request_id,
+                "session_id":       session_id,
+                "agent_ms":         agent_ms,
+                "signoff_ms":       signoff_ms,
+                "message":          "",
+                "rejection_history": rejection_history,
+                "draft":            draft,
+                "chart":            chart,
+                "updated_params":   updated_params,
+                "adm_codes":        adm_codes,
+                "analysis_type":    analysis_type,
+            }
+            return
+
+        rejection_history.append({
+            "attempt":    attempt,
+            "verdict":    verdict,
+            "agent_ms":   agent_ms,
+            "signoff_ms": signoff_ms,
+        })
+        retry_prompt = verdict.get("retry_prompt", "")
+
+        if attempt > max_retries:
+            break
+
+    actual_retries = len(rejection_history)
+    yield {
+        "event":            "complete",
+        "status":           "escalated",
+        "grade":            "C",
+        "confidence_note":  "",
+        "retry_count":      actual_retries,
+        "request_id":       request_id,
+        "session_id":       session_id,
+        "agent_ms":         0,
+        "signoff_ms":       0,
+        "message":          f"재시도 {actual_retries}회 초과.",
+        "rejection_history": rejection_history,
+        "draft":            draft,
+        "chart":            chart,
+        "updated_params":   updated_params,
+        "adm_codes":        adm_codes,
+        "analysis_type":    analysis_type,
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
     }

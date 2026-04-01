@@ -16,6 +16,8 @@ pydantic==2.11.5
 azure-identity==1.25.2
 azure-search-documents==11.6.0   # CHOI — 법령 벡터 검색
 azure-core==1.33.0
+azure-cosmos==4.9.0              # 세션 Stateless 저장소
+azure-storage-blob==12.25.1      # 로그 영구 저장소
 
 # PDF 생성 (NAM)
 reportlab==4.2.5
@@ -26,6 +28,9 @@ jinja2==3.1.6
 # 재무 시각화 (CHANG)
 matplotlib==3.10.1
 numpy==2.2.3
+
+# Oracle DB (상권 에이전트)
+oracledb==2.5.0
 
 # 유틸리티
 python-dotenv==1.2.2

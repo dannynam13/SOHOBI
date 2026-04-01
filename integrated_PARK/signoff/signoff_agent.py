@@ -4,33 +4,42 @@ Sign-off Agent: 하위 에이전트 draft의 품질을 판정한다.
 """
 
 import json
+import os
 import re
 from pathlib import Path
 
-from semantic_kernel.contents import ChatHistory
-from semantic_kernel.connectors.ai.open_ai import AzureChatPromptExecutionSettings
+import openai
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
 
+_SECURITY_CODES  = {"SEC1", "SEC2", "SEC3"}
+_REJECTION_CODES = {"RJ1", "RJ2", "RJ3"}
+
 REQUIRED_CODES = {
-    "admin":   {"C1", "C2", "C3", "C4", "C5", "A1", "A2", "A3", "A4", "A5"},
-    "finance": {"C1", "C2", "C3", "C4", "C5", "F1", "F2", "F3", "F4", "F5"},
-    "legal":   {"C1", "C2", "C3", "C4", "C5", "G1", "G2", "G3", "G4"},
+    "admin":    {"C1", "C2", "C3", "C4", "C5", "A1", "A2", "A3", "A4", "A5"} | _SECURITY_CODES | _REJECTION_CODES,
+    "finance":  {"C1", "C2", "C3", "C4", "C5", "F1", "F2", "F3", "F4", "F5"} | _SECURITY_CODES | _REJECTION_CODES,
+    "legal":    {"C1", "C2", "C3", "C4", "C5", "G1", "G2", "G3", "G4"}       | _SECURITY_CODES | _REJECTION_CODES,
+    "location": {"C1", "C2", "C3", "C4", "C5", "S1", "S2", "S3", "S4", "S5"} | _SECURITY_CODES | _REJECTION_CODES,
 }
 
 
-def _build_history(domain: str, draft: str) -> ChatHistory:
-    prompt_file = PROMPTS_DIR / f"signoff_{domain}" / "evaluate" / "skprompt.txt"
-    raw = prompt_file.read_text(encoding="utf-8").replace("{{$draft}}", draft)
+_DRAFT_START = "<<<DRAFT_START>>>"
+_DRAFT_END   = "<<<DRAFT_END>>>"
 
-    history = ChatHistory()
+
+def _build_messages(domain: str, draft: str) -> list[dict]:
+    prompt_file = PROMPTS_DIR / f"signoff_{domain}" / "evaluate" / "skprompt.txt"
+    # draft 내 구분자 이스케이프 — 사용자 입력이 draft에 포함될 경우 signoff 판정 인젝션 방지
+    sanitized = draft.replace(_DRAFT_END, "[DRAFT_END]").replace(_DRAFT_START, "[DRAFT_START]")
+    safe_draft = f"{_DRAFT_START}\n{sanitized}\n{_DRAFT_END}"
+    raw = prompt_file.read_text(encoding="utf-8").replace("{{$draft}}", safe_draft)
+
+    messages = []
     for m in re.finditer(r'<message role="(\w+)">(.*?)</message>', raw, re.DOTALL):
         role, content = m.group(1), m.group(2).strip()
-        if role == "system":
-            history.add_system_message(content)
-        elif role == "user":
-            history.add_user_message(content)
-    return history
+        if role in ("system", "user"):
+            messages.append({"role": role, "content": content})
+    return messages
 
 
 def _derive_grade(verdict: dict) -> str:
@@ -46,24 +55,41 @@ def _derive_grade(verdict: dict) -> str:
     return "A"
 
 
+<<<<<<< HEAD
 async def run_signoff(kernel, domain: str, draft: str, max_retries: int = 2) -> dict:
+=======
+async def run_signoff(client: openai.AsyncAzureOpenAI, domain: str, draft: str, max_retries: int = 0) -> dict:
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
     required_codes = REQUIRED_CODES[domain]
-    chat_service = kernel.get_service("sign_off")
-    settings = AzureChatPromptExecutionSettings(
-        response_format={"type": "json_object"}
-    )
-    history = _build_history(domain, draft)
+    deployment = os.getenv("AZURE_SIGNOFF_DEPLOYMENT")
+    messages = _build_messages(domain, draft)
 
     for attempt in range(max_retries + 1):
-        result = await chat_service.get_chat_message_content(
-            chat_history=history,
-            settings=settings,
+        response = await client.chat.completions.create(
+            model=deployment,
+            messages=messages,
+            response_format={"type": "json_object"},
         )
-        verdict = json.loads(str(result))
+        result_text = response.choices[0].message.content
+        m = re.search(r'\{.*\}', result_text, re.DOTALL)
+        try:
+            verdict = json.loads(m.group() if m else result_text)
+        except json.JSONDecodeError:
+            verdict = {
+                "approved": False, "grade": "C",
+                "passed": [], "warnings": [], "issues": [],
+                "retry_prompt": "응답을 JSON 형식으로만 출력하십시오",
+                "confidence_note": "",
+            }
 
         passed_set   = set(verdict.get("passed", []))
+<<<<<<< HEAD
         issues_set   = {i["code"] for i in verdict.get("issues", [])}
         warnings_set = {w["code"] for w in verdict.get("warnings", [])}
+=======
+        issues_set   = {i["code"] if isinstance(i, dict) else i for i in verdict.get("issues", [])}
+        warnings_set = {w["code"] if isinstance(w, dict) else w for w in verdict.get("warnings", [])}
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
         missing = required_codes - (passed_set | issues_set | warnings_set)
 
         if not missing:
@@ -71,20 +97,41 @@ async def run_signoff(kernel, domain: str, draft: str, max_retries: int = 2) -> 
             verdict["approved"] = len(issues_set) == 0
             if "grade" not in verdict:
                 verdict["grade"] = _derive_grade(verdict)
+<<<<<<< HEAD
+=======
+            # approved=False인데 retry_prompt가 없으면 빈 문자열 방지
+            if not verdict["approved"] and not verdict.get("retry_prompt"):
+                verdict["retry_prompt"] = "응답 품질을 개선하십시오. 관련 법령 조항, 절차, 기관명을 구체적으로 포함하세요."
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
             return verdict
 
         if attempt < max_retries:
             missing_list = ", ".join(sorted(missing))
+<<<<<<< HEAD
             history.add_assistant_message(str(result))
             history.add_user_message(
+=======
+            messages.append({"role": "assistant", "content": result_text})
+            messages.append({"role": "user", "content":
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
                 f"다음 항목이 passed, warnings, issues 중 어디에도 누락되어 있습니다: {missing_list}\n"
                 f"이 항목들을 포함하여 전체 평가를 다시 JSON 형식으로 출력하십시오."
-            )
+            })
 
     # 최대 재시도 후에도 커버리지 미달 시 가용 verdict 반환
+<<<<<<< HEAD
     verdict["approved"] = len({i["code"] for i in verdict.get("issues", [])}) == 0
     if "grade" not in verdict:
         verdict["grade"] = _derive_grade(verdict)
+=======
+    issues_codes = {i["code"] if isinstance(i, dict) else i for i in verdict.get("issues", [])}
+    verdict["approved"] = len(issues_codes) == 0
+    if "grade" not in verdict:
+        verdict["grade"] = _derive_grade(verdict)
+    # approved=False인데 retry_prompt가 없으면 빈 문자열 방지
+    if not verdict["approved"] and not verdict.get("retry_prompt"):
+        verdict["retry_prompt"] = "응답 품질을 개선하십시오. 관련 법령 조항, 절차, 기관명을 구체적으로 포함하세요."
+>>>>>>> 428aeaf2bf39d70f7f9aa431b68d04ed18605933
     return verdict
 
 
