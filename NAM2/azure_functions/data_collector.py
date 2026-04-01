@@ -436,42 +436,64 @@ def collect_sme24() -> list[dict]:
 # ━━━ 7. 기업마당 API ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def collect_bizinfo() -> list[dict]:
-    """기업마당(bizinfo) 지원사업 API"""
+    """기업마당(bizinfo) 지원사업 API — bizinfo.go.kr 자체 발급 인증키 사용"""
     api_key = os.getenv("BIZINFO_API_KEY", "")
     if not api_key or api_key.startswith("your-"):
         logging.info("[bizinfo] API 키 없음, 스킵")
         return []
 
+    # 소상공인/창업 관련 분야별로 수집
+    categories = ["금융", "창업", "경영", "기술", "인력"]
     results = []
-    try:
-        url = "https://www.bizinfo.go.kr/uss/rss/bizRss.do"
-        resp = requests.get(url, params={
-            "dataType": "json", "searchCnt": 100, "authKey": api_key,
-        }, timeout=15)
-        if resp.status_code == 200:
+
+    for category in categories:
+        try:
+            url = "https://www.bizinfo.go.kr/uss/rss/bizinfoApi.do"
+            resp = requests.get(url, params={
+                "crtfcKey": api_key,
+                "dataType": "json",
+                "searchCnt": 100,
+                "category": category,
+            }, timeout=20)
+
+            if resp.status_code != 200:
+                logging.warning(f"[bizinfo] category={category} status {resp.status_code}")
+                continue
+
             data = resp.json()
-            items = data.get("jsonArray", [])
+            if "reqErr" in data:
+                logging.warning(f"[bizinfo] API 에러: {data['reqErr']}")
+                break
+
+            items = data.get("jsonArray", data.get("items", []))
             for item in items:
+                pblanc_nm = item.get("pblancNm", "")
+                if not pblanc_nm:
+                    continue
                 results.append({
                     "service_id": f"bizinfo_{item.get('pblancId', '')}",
-                    "program_name": item.get("pblancNm", ""),
-                    "summary": item.get("pblancNm", ""),
-                    "field": "지원사업",
-                    "target": item.get("jrsdInsttNm", "소상공인, 중소기업"),
-                    "criteria": "",
-                    "support_content": item.get("pblancNm", ""),
-                    "apply_method": "기업마당 홈페이지",
-                    "apply_deadline": item.get("reqstEndDe", ""),
-                    "org_name": item.get("excInsttNm", "기업마당"),
-                    "phone": "국번없이 1357",
-                    "url": item.get("detailPageUrl", "https://www.bizinfo.go.kr"),
+                    "program_name": pblanc_nm,
+                    "summary": item.get("bsnsSumryCn", pblanc_nm),
+                    "field": item.get("pldirSportRealmMlsfcCodeNm", category),
+                    "target": item.get("trgetNm", "중소기업, 소상공인"),
+                    "criteria": item.get("slctnMthdCn", ""),
+                    "support_content": item.get("sporCn", pblanc_nm),
+                    "apply_method": item.get("rcptMthdCn", "기업마당 홈페이지"),
+                    "apply_deadline": item.get("reqstEndDe", item.get("endDt", "")),
+                    "org_name": item.get("excInsttNm", item.get("jrsdInsttNm", "")),
+                    "phone": item.get("cntctTelno", "국번없이 1357"),
+                    "url": item.get("detailPageUrl", f"https://www.bizinfo.go.kr"),
                     "support_type": item.get("sporTypeNm", "지원사업"),
                     "source_name": "bizinfo",
                 })
-            logging.info(f"[bizinfo] {len(results)}건 수집")
-    except Exception as e:
-        logging.warning(f"[bizinfo] error: {e}")
 
+            logging.info(f"[bizinfo] category={category}: {len(items)}건")
+            time.sleep(0.3)
+
+        except Exception as e:
+            logging.warning(f"[bizinfo] category={category} error: {e}")
+
+    logging.info(f"[bizinfo] 총 {len(results)}건 수집")
     return results
 
 
