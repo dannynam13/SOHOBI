@@ -130,38 +130,38 @@ class GovSupportPlugin:
     )
     def recommend_programs(
         self,
-        업종: Annotated[str, "사용자 업종 (예: 카페, 음식점, 베이커리, 식품제조). 모르면 '미정'"],
-        지역: Annotated[str, "사용자 지역 (예: 서울, 경기, 부산). 모르면 빈 문자열"],
-        창업단계: Annotated[str, "예비창업/초기창업(3년이내)/운영중/폐업예정/재창업. 모르면 '미정'"],
-        직원수: Annotated[str, "현재 또는 예상 직원수 (예: 0명, 3명, 10명). 모르면 '미정'"] = "미정",
-        필요자금: Annotated[str, "필요한 자금 규모 (예: 3천만원, 1억). 모르면 '미정'"] = "미정",
-        자금용도: Annotated[str, "자금 용도 (예: 인테리어, 운전자금, 장비구매). 모르면 '미정'"] = "미정",
-        추가정보: Annotated[str, "기타 사용자 상황 (예: 폐업 경험 있음, 청년, 여성 등). 없으면 빈 문자열"] = "",
+        business_type: Annotated[str, "사용자 업종 (예: 카페, 음식점, 베이커리, 식품제조). 모르면 '미정'"],
+        region: Annotated[str, "사용자 지역 (예: 서울, 경기, 부산). 모르면 빈 문자열"],
+        startup_stage: Annotated[str, "예비창업/초기창업(3년이내)/운영중/폐업예정/재창업. 모르면 '미정'"],
+        employee_count: Annotated[str, "현재 또는 예상 직원수 (예: 0명, 3명, 10명). 모르면 '미정'"] = "미정",
+        funding_needed: Annotated[str, "필요한 자금 규모 (예: 3천만원, 1억). 모르면 '미정'"] = "미정",
+        funding_purpose: Annotated[str, "자금 용도 (예: 인테리어, 운전자금, 장비구매). 모르면 '미정'"] = "미정",
+        additional_info: Annotated[str, "기타 사용자 상황 (예: 폐업 경험 있음, 청년, 여성 등). 없으면 빈 문자열"] = "",
     ) -> str:
         if not self._available:
             return "추천 서비스가 설정되지 않았습니다. (AZURE_SEARCH_API_KEY, AZURE_SEARCH_ENDPOINT 확인)"
 
         try:
-            if not 지역:
-                지역 = ""
-            region = self._extract_region(지역) if 지역 else ""
+            if not region:
+                region = ""
+            extracted_region = self._extract_region(region) if region else ""
 
             # 사용자 프로필 구성
             profile = {
-                "업종": 업종 if 업종 != "미정" else "소상공인",
-                "지역": 지역 or "전국",
-                "창업단계": 창업단계 if 창업단계 != "미정" else "",
-                "직원수": 직원수 if 직원수 != "미정" else "",
-                "자금용도": 자금용도 if 자금용도 != "미정" else "운전자금",
+                "업종": business_type if business_type != "미정" else "소상공인",
+                "지역": region or "전국",
+                "창업단계": startup_stage if startup_stage != "미정" else "",
+                "직원수": employee_count if employee_count != "미정" else "",
+                "자금용도": funding_purpose if funding_purpose != "미정" else "운전자금",
             }
 
             profile_summary = (
                 f"[사용자 프로필] 업종: {profile['업종']}, 지역: {profile['지역']}, "
-                f"단계: {profile['창업단계'] or '미정'}, 직원: {직원수}, "
-                f"필요자금: {필요자금}, 용도: {자금용도}"
+                f"단계: {profile['창업단계'] or '미정'}, 직원: {employee_count}, "
+                f"필요자금: {funding_needed}, 용도: {funding_purpose}"
             )
-            if 추가정보:
-                profile_summary += f", 기타: {추가정보}"
+            if additional_info:
+                profile_summary += f", 기타: {additional_info}"
 
             # 다중 카테고리 검색 실행
             all_results = {}
@@ -169,7 +169,7 @@ class GovSupportPlugin:
 
             for cat in RECOMMEND_CATEGORIES:
                 query = cat["query_template"].format(**profile)
-                results = self._search_one(query, region, top_k=5)
+                results = self._search_one(query, extracted_region, top_k=5)
 
                 cat_results = []
                 for r in results:
