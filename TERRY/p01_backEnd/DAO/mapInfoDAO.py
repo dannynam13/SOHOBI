@@ -85,9 +85,26 @@ class MapInfoDAO(BaseDAO):
                 results[t] = f"실패: {e}"
         return {"reloaded": results}
 
-    # ── 반경 조회 (캐시 우선, 캐시 미스 시 DB 직접) ──────────────
+    # ── 반경 조회 (DB 직접, IDX_SEOUL_LATLON 인덱스 활용) ──────────
 
-    def _query_cache(self, lat, lng, radius, limit, category=None):
+    COLS = [
+        "STORE_ID",
+        "STORE_NM",
+        "CAT_CD",
+        "CAT_NM",
+        "MID_CAT_NM",
+        "SUB_CAT_NM",
+        "SIDO_NM",
+        "SGG_NM",
+        "ADM_NM",
+        "ROAD_ADDR",
+        "FLOOR_INFO",
+        "UNIT_INFO",
+        "LNG",
+        "LAT",
+    ]
+
+    def _query_db(self, lat, lng, radius, limit, category=None):
         tables = getTableByCoord(lat, lng)
         lat_delta = radius / 111000.0
         lng_delta = radius / (111000.0 * abs(math.cos(math.radians(lat))) or 1)
@@ -96,50 +113,53 @@ class MapInfoDAO(BaseDAO):
 
         all_rows = []
         for table in tables:
-            if table in _DF_CACHE:
-                df = _DF_CACHE[table]
-                mask = (
-                    (df["LAT"] >= la_min)
-                    & (df["LAT"] <= la_max)
-                    & (df["LNG"] >= ln_min)
-                    & (df["LNG"] <= ln_max)
-                )
-                if category:
-                    mask &= df["CAT_NM"] == category
-                all_rows.extend(df[mask].head(limit).to_dict(orient="records"))
-            else:
-                where_cat = "AND CAT_NM = :category" if category else ""
-                sql = f"""
-                    SELECT STORE_ID, STORE_NM,
-                           CAT_CD, CAT_NM, MID_CAT_NM, SUB_CAT_NM,
-                           SIDO_NM, SGG_NM, ADM_NM, ROAD_ADDR,
-                           FLOOR_INFO, UNIT_INFO, LNG, LAT
-                    FROM {table}
-                    WHERE LAT BETWEEN :lat_min AND :lat_max
-                      AND LNG BETWEEN :lng_min AND :lng_max
-                      AND LAT IS NOT NULL AND LNG IS NOT NULL
-                      {where_cat}
-                    FETCH FIRST :limit ROWS ONLY
-                """
-                params = dict(
-                    lat_min=la_min,
-                    lat_max=la_max,
-                    lng_min=ln_min,
-                    lng_max=ln_max,
-                    limit=limit,
-                )
-                if category:
-                    params["category"] = category
-                rows = self._query(sql, params)
-                all_rows.extend(rows)
+            where_cat = "AND CAT_CD = :category" if category else ""
+            sql = f"""
+                SELECT STORE_ID, STORE_NM,
+                       CAT_CD, CAT_NM, MID_CAT_NM, SUB_CAT_NM,
+                       SIDO_NM, SGG_NM, ADM_NM, ROAD_ADDR,
+                       FLOOR_INFO, UNIT_INFO, LNG, LAT
+                FROM {table}
+                WHERE LAT BETWEEN :lat_min AND :lat_max
+                  AND LNG BETWEEN :lng_min AND :lng_max
+                  {where_cat}
+                FETCH FIRST :limit ROWS ONLY
+            """
+            params = dict(
+                lat_min=la_min,
+                lat_max=la_max,
+                lng_min=ln_min,
+                lng_max=ln_max,
+                limit=limit,
+            )
+            if category:
+                params["category"] = category
+            rows = self._query(sql, params)
+            # tuple → dict 변환
+            all_rows.extend([dict(zip(self.COLS, r)) for r in rows])
 
         return all_rows[:limit]
 
     def getNearbyStores(self, lat, lng, radius=500, limit=500):
-        return self._query_cache(lat, lng, radius, limit)
+        return self._query_db(lat, lng, radius, limit)
 
     def getNearbyByCategory(self, lat, lng, category, radius=500, limit=1000):
-        return self._query_cache(lat, lng, radius, limit, category=category)
+        return self._query_db(lat, lng, radius, limit, category=category)
+
+    # ── 행정동코드(adm_cd) 기준 전체 스토어 조회 ─────────────────
+    def getStoresByAdmCd(self, adm_cd: str, limit: int = 3000) -> list:
+        sql = """
+            SELECT STORE_ID, STORE_NM,
+                   CAT_CD, CAT_NM, MID_CAT_NM, SUB_CAT_NM,
+                   SIDO_NM, SGG_NM, ADM_NM, ROAD_ADDR,
+                   FLOOR_INFO, UNIT_INFO, LNG, LAT
+            FROM STORE_SEOUL
+            WHERE 행정동코드 = :adm_cd
+              AND LNG IS NOT NULL AND LAT IS NOT NULL
+            FETCH FIRST :limit ROWS ONLY
+        """
+        rows = self._query(sql, {"adm_cd": adm_cd, "limit": limit})
+        return [dict(zip(self.COLS, r)) for r in rows]
 
     # ── 업종 목록 ────────────────────────────────────────────────
 

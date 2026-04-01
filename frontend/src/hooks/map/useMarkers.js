@@ -1,5 +1,5 @@
 // 개발 프론트 위치: TERRY\p02_frontEnd_React\src\hooks\useMarkers.js
-// 공식 프론트 위치: frontend\src\hooks\map\useLandmarkLayer.js
+// 공식 프론트 위치: frontend\src\hooks\map\useMarkers.js
 
 import { useRef, useEffect } from "react";
 import { fromLonLat } from "ol/proj";
@@ -8,10 +8,10 @@ import VectorLayer from "ol/layer/Vector";
 import VectorSource from "ol/source/Vector";
 import Feature from "ol/Feature";
 import Point from "ol/geom/Point";
-import { Style, Circle as CircleStyle, Fill, Stroke } from "ol/style";
+import { Style, Circle as CircleStyle, Fill, Stroke, Text } from "ol/style";
+import Cluster from "ol/source/Cluster";
 import { CATEGORIES } from "../../constants/categories";
 
-// ── 마커 스타일 생성 ───────────────────────────────────────────
 const CAT_COLORS = {
    I2: "#FF6B6B",
    G2: "#FF9800",
@@ -39,13 +39,30 @@ function makeMarkerStyle(category, selected = false) {
    });
 }
 
-// ── 훅: 마커/반경원 그리기 ─────────────────────────────────────
+// 클러스터 스타일
+function makeClusterStyle(size, color) {
+   const radius = size < 5 ? 10 : size < 20 ? 13 : size < 100 ? 16 : 20;
+   return new Style({
+      image: new CircleStyle({
+         radius,
+         fill: new Fill({ color }),
+         stroke: new Stroke({ color: "#fff", width: 2 }),
+      }),
+      text: new Text({
+         text: String(size),
+         fill: new Fill({ color: "#fff" }),
+         font: `bold ${radius}px sans-serif`,
+      }),
+   });
+}
+
 export function useMarkers(mapInstance, visibleCats) {
-   const markerLayerRef = useRef(null);
+   const clusterLayerRef = useRef(null);
    const circleLayerRef = useRef(null);
    const allStoresRef = useRef([]);
+   const selectedFeatRef = useRef(null);
+   const clusterSourceRef = useRef(null);
 
-   // ── 반경 원 그리기 ──────────────────────────────────────────
    const drawCircle = (lng, lat, radius) => {
       const map = mapInstance.current;
       if (!map) return;
@@ -67,67 +84,75 @@ export function useMarkers(mapInstance, visibleCats) {
       circleLayerRef.current = layer;
    };
 
-   // ── 마커 렌더링 (카테고리 필터 적용) ────────────────────────
    const drawMarkers = (stores, visible = visibleCats) => {
       const map = mapInstance.current;
       if (!map) return;
-      if (markerLayerRef.current) map.removeLayer(markerLayerRef.current);
+      if (clusterLayerRef.current) map.removeLayer(clusterLayerRef.current);
 
       const features = stores
          .filter((s) => s.LNG && s.LAT)
-         .filter((s) => {
-            const code = s.CAT_CD;
-            if (!code) return true; // 코드 없으면 표시
-            return visible.has(code);
-         })
+         .filter((s) => !s.CAT_CD || visible.has(s.CAT_CD))
          .map((store) => {
-            const feature = new Feature({
+            const f = new Feature({
                geometry: new Point(
                   fromLonLat([parseFloat(store.LNG), parseFloat(store.LAT)]),
                ),
             });
-            feature.setProperties({ store });
-            feature.setStyle(makeMarkerStyle(store.CAT_CD));
-            return feature;
+            f.setProperties({ store });
+            return f;
          });
 
+      const vectorSource = new VectorSource({ features });
+      const clusterSource = new Cluster({ source: vectorSource, distance: 40 });
+      clusterSourceRef.current = clusterSource;
+
       const layer = new VectorLayer({
-         source: new VectorSource({ features }),
+         source: clusterSource,
          zIndex: 100,
+         style: (feature) => {
+            const members = feature.get("features") || [];
+            if (members.length === 1) {
+               const store = members[0].get("store");
+               return makeMarkerStyle(store?.CAT_CD);
+            }
+            // 클러스터 - 대표 카테고리 색상
+            const cats = members
+               .map((f) => f.get("store")?.CAT_CD)
+               .filter(Boolean);
+            const topCat = cats.sort(
+               (a, b) =>
+                  cats.filter((c) => c === b).length -
+                  cats.filter((c) => c === a).length,
+            )[0];
+            const color = CAT_COLORS[topCat] || "#888";
+            return makeClusterStyle(members.length, color);
+         },
       });
+
       map.addLayer(layer);
-      markerLayerRef.current = layer;
+      clusterLayerRef.current = layer;
    };
 
-   // ── 마커 선택 하이라이트 ────────────────────────────────────
-   const selectedFeatRef = useRef(null);
-
    const selectMarker = (feature) => {
-      const map = mapInstance.current;
-      if (!map) return;
-      // 이전 선택 해제
       if (selectedFeatRef.current) {
          const prev = selectedFeatRef.current;
-         const prevStore = prev.get("store");
-         prev.setStyle(makeMarkerStyle(prevStore?.CAT_CD));
+         prev.setStyle(makeMarkerStyle(prev.get("store")?.CAT_CD));
       }
       if (!feature) {
          selectedFeatRef.current = null;
          return;
       }
-      // 새 선택 하이라이트
       const store = feature.get("store");
       feature.setStyle(makeMarkerStyle(store?.CAT_CD, true));
       selectedFeatRef.current = feature;
    };
 
-   // ── 마커/원 제거 ────────────────────────────────────────────
    const clearMarkers = () => {
       const map = mapInstance.current;
       if (!map) return;
-      if (markerLayerRef.current) {
-         map.removeLayer(markerLayerRef.current);
-         markerLayerRef.current = null;
+      if (clusterLayerRef.current) {
+         map.removeLayer(clusterLayerRef.current);
+         clusterLayerRef.current = null;
       }
       if (circleLayerRef.current) {
          map.removeLayer(circleLayerRef.current);
@@ -136,20 +161,26 @@ export function useMarkers(mapInstance, visibleCats) {
       allStoresRef.current = [];
    };
 
-   // visibleCats 바뀌면 마커 재렌더링
-   // Set 참조 동일성 문제 → size + join으로 변경 감지
    const visibleKey = [...visibleCats].sort().join(",");
    useEffect(() => {
       if (allStoresRef.current.length > 0)
          drawMarkers(allStoresRef.current, visibleCats);
-   }, [visibleKey]); // eslint-disable-line react-hooks/exhaustive-deps
+   }, [visibleKey]); // eslint-disable-line
+
+   // 클러스터 클릭 시 단일 피처 반환 헬퍼
+   const getSingleFeature = (feature) => {
+      const members = feature?.get("features");
+      if (members?.length === 1) return members[0];
+      return null;
+   };
 
    return {
-      markerLayerRef,
+      markerLayerRef: clusterLayerRef,
       allStoresRef,
       drawCircle,
       drawMarkers,
       clearMarkers,
       selectMarker,
+      getSingleFeature,
    };
 }

@@ -1,54 +1,26 @@
 // 개발 프론트 위치: TERRY\p02_frontEnd_React\src\controls\MapControls.jsx
 // 공식 프론트 위치: frontend\src\components\map\controls\MapControls.jsx
 
-// ── 메인 컴포넌트: 상단 컨트롤 바 + 동 모드 버튼 ────────────
 export default function MapControls({
-   clickMode,
-   setClickMode,
    nearbyCount,
+   onStoreSearch,
    loading,
    onClear,
    dongMode,
    onDongMode,
    dongLoading,
    currentGuNm,
-   roadviewMode,
-   onRoadviewToggle,
-   onPopPanel,
 }) {
    return (
       <>
-         {
-            // ── 상단 컨트롤 바 ─────────────────────────────────────────────
-            /* 상단 컨트롤 바 */
-         }
+         {/* 상단 컨트롤 바 - 로딩/초기화만 */}
          <div className="mv-ctrl-bar">
-            <button
-               className={`mv-ctrl-btn ${clickMode ? "mv-ctrl-btn--on" : "mv-ctrl-btn--off"}`}
-               onClick={() => setClickMode((v) => !v)}
-            >
-               {clickMode ? "📍 반경분석 ON" : "📍 반경분석 OFF"}
-            </button>
+            {loading && <span className="mv-ctrl-loading">DB 조회 중...</span>}
             {nearbyCount !== null && (
                <span className="mv-ctrl-badge">
                   반경 500m · {nearbyCount}건
                </span>
             )}
-            <button
-               className={`mv-ctrl-btn ${roadviewMode ? "mv-ctrl-btn--on" : "mv-ctrl-btn--off"}`}
-               onClick={onRoadviewToggle}
-               title="로드뷰 모드 ON/OFF"
-            >
-               {roadviewMode ? "🚶 로드뷰 ON" : "🚶 로드뷰 OFF"}
-            </button>
-            <button
-               className="mv-ctrl-btn mv-ctrl-btn--off"
-               onClick={onPopPanel}
-               title="유동인구 패널"
-            >
-               👥 유동인구
-            </button>
-            {loading && <span className="mv-ctrl-loading">DB 조회 중...</span>}
             {nearbyCount !== null && (
                <button className="mv-ctrl-clear" onClick={onClear}>
                   ✕ 초기화
@@ -56,10 +28,7 @@ export default function MapControls({
             )}
          </div>
 
-         {
-            // ── 동 모드 버튼 (왼쪽 하단) ──────────────────────────────────
-            /* 동 모드 버튼 (왼쪽 하단) */
-         }
+         {/* 동 모드 버튼 (왼쪽 하단) */}
          <div
             style={{
                position: "absolute",
@@ -115,7 +84,8 @@ export default function MapControls({
                   ⏳ 동 데이터 로딩 중...
                </div>
             )}
-            {/* 점포수 / 매출 / 실거래가 - 가로 배치 */}
+
+            {/* 점포수 / 매출 / 부동산 버튼 */}
             <div style={{ display: "flex", flexDirection: "row", gap: 6 }}>
                {[
                   { mode: "store", label: "점포수", activeColor: "#7C3AED" },
@@ -151,6 +121,25 @@ export default function MapControls({
                   );
                })}
             </div>
+
+            {/* 선택 동 상가 전체 검색 */}
+            <button
+               onClick={onStoreSearch}
+               style={{
+                  border: "2px solid #0891B2",
+                  borderRadius: 10,
+                  padding: "7px 12px",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  background: "#fff",
+                  color: "#0891B2",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                  whiteSpace: "nowrap",
+               }}
+            >
+               🏪 상가 전체 검색
+            </button>
          </div>
       </>
    );

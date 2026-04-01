@@ -26,6 +26,8 @@ export default function StorePopup({
    kakaoDetail,
    loadingDetail,
    onClose,
+   nearbyStores = [],
+   onStoreSelect,
 }) {
    if (!popup) return null;
    const cat = getCatStyle(popup.CAT_CD);
@@ -241,19 +243,18 @@ export default function StorePopup({
                      rel="noreferrer"
                      style={{
                         marginTop: 12,
-                        display: "flex",
-                        justifyContent: "center",
+                        display: "inline-flex",
                         alignItems: "center",
                         background: "#fee500",
                         borderRadius: 10,
-                        padding: "9px",
-                        fontSize: 13,
+                        padding: "7px 14px",
+                        fontSize: 12,
                         fontWeight: 700,
                         color: "#111",
                         textDecoration: "none",
                      }}
                   >
-                     카카오맵에서 보기 →
+                     카카오맵 →
                   </a>
                </>
             )}
@@ -268,6 +269,80 @@ export default function StorePopup({
                >
                   카카오맵 정보를 찾을 수 없습니다
                </div>
+            )}
+
+            {/* 주변 상가 리스트 */}
+            {nearbyStores.length > 0 && (
+               <>
+                  <div
+                     style={{
+                        height: 1,
+                        background: "#f0f0f0",
+                        margin: "12px 0 8px",
+                     }}
+                  />
+                  <div
+                     style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: "#aaa",
+                        marginBottom: 6,
+                     }}
+                  >
+                     같은 동 상가 ({nearbyStores.length}건)
+                  </div>
+                  <div style={{ maxHeight: 160, overflowY: "auto" }}>
+                     {nearbyStores.slice(0, 20).map((s, i) => {
+                        const c = CAT_STYLE[s.CAT_CD] || {
+                           color: "#888",
+                           bg: "#f5f5f5",
+                           label: "기타",
+                        };
+                        return (
+                           <div
+                              key={s.STORE_ID || i}
+                              onClick={() => onStoreSelect?.(s)}
+                              style={{
+                                 display: "flex",
+                                 alignItems: "center",
+                                 gap: 8,
+                                 padding: "6px 4px",
+                                 cursor: "pointer",
+                                 borderRadius: 6,
+                                 borderBottom: "1px solid #f5f5f5",
+                              }}
+                           >
+                              <div
+                                 style={{
+                                    width: 8,
+                                    height: 8,
+                                    borderRadius: "50%",
+                                    background: c.color,
+                                    flexShrink: 0,
+                                 }}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                 <div
+                                    style={{
+                                       fontSize: 12,
+                                       fontWeight: 600,
+                                       color: "#222",
+                                       overflow: "hidden",
+                                       textOverflow: "ellipsis",
+                                       whiteSpace: "nowrap",
+                                    }}
+                                 >
+                                    {s.STORE_NM}
+                                 </div>
+                                 <div style={{ fontSize: 10, color: "#aaa" }}>
+                                    {c.label}
+                                 </div>
+                              </div>
+                           </div>
+                        );
+                     })}
+                  </div>
+               </>
             )}
          </div>
       </div>

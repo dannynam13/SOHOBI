@@ -1,3 +1,6 @@
+// 개발 프론트 위치: TERRY\p02_frontEnd_React\src\components\MapView.jsx
+// 공식 프론트 위치: frontend\src\components\map\MapView.jsx
+
 import { useRef, useState, useEffect } from "react";
 import { useMap } from "../../hooks/map/useMap";
 import { toLonLat, fromLonLat } from "ol/proj";
@@ -17,9 +20,6 @@ import WmsPopup from "./popup/WmsPopup";
 import StorePopup from "./popup/StorePopup";
 import ChatPanel from "./ChatPanel";
 import LandmarkPopup from "./popup/LandmarkPopup";
-import PopulationPanel from "./panel/PopulationPanel";
-import RoadviewPanel from "./panel/RoadviewPanel";
-import { usePopulationLayer } from "../../hooks/map/usePopulationLayer";
 import { useLandmarkLayer } from "../../hooks/map/useLandmarkLayer";
 
 // ── 커스텀 훅 ──────────────────────────────────────────────────
@@ -36,7 +36,7 @@ import { CATEGORIES } from "../../constants/categories";
 import "./MapView.css";
 
 // ── API 엔드포인트 (vite proxy: /map-api → 8681, /realestate → 8682) ──
-const FASTAPI_URL = import.meta.env.VITE_MAP_API_URL || "/map-api";
+const FASTAPI_URL = import.meta.env.VITE_MAP_URL || "http://localhost:8681";
 const REALESTATE_URL = import.meta.env.VITE_REALESTATE_URL || "";
 const KAKAO_REST_KEY = import.meta.env.VITE_KAKAO_API_KEY;
 
@@ -70,41 +70,32 @@ function getRadiusAndLimit(zoom) {
 export default function MapView() {
    const mapRef = useRef(null);
    const mapInstance = useMap(mapRef);
-   const clickModeRef = useRef(true);
    const wmsLayerRef = useRef(null);
 
    const [coords, setCoords] = useState({ lat: "37.5665", lng: "126.9780" });
    const [chatOpen, setChatOpen] = useState(false);
    const [chatContext, setChatContext] = useState(null);
    const [landmarkLoaded, setLandmarkLoaded] = useState(false);
-   const [showPopPanel, setShowPopPanel] = useState(false);
-   const [popVisible, setPopVisible] = useState(true);
-   const [popCount, setPopCount] = useState(0);
-   const [roadviewMode, setRoadviewMode] = useState(false);
-   const [roadviewPos, setRoadviewPos] = useState(null);
    const [landmarkPopup, setLandmarkPopup] = useState(null);
-   const [lmKakao, setLmKakao] = useState(null);
-   const [lmKakaoLoading, setLmKakaoLoading] = useState(false);
    const [festivalLoaded, setFestivalLoaded] = useState(false);
    const [schoolLoaded, setSchoolLoaded] = useState(false);
-   const [sdotLoaded, setSdotLoaded] = useState(false);
    const [popup, setPopup] = useState(null);
    const [kakaoDetail, setKakaoDetail] = useState(null);
    const [loadingDetail, setLoadingDetail] = useState(false);
    const [nearbyCount, setNearbyCount] = useState(null);
+   const [clusterPopup, setClusterPopup] = useState(null);
    const [loading, setLoading] = useState(false);
    const [wmsPopup, setWmsPopup] = useState(null);
    const [landValue, setLandValue] = useState(null);
    const [showPanel, setShowPanel] = useState(false);
-   const [clickMode, setClickMode] = useState(true);
 
-   const [dongMode, setDongMode] = useState("none");
+   const [dongMode, setDongMode] = useState("sales");
    const [dongLoading, setDongLoading] = useState(false);
    const [dongPanel, setDongPanel] = useState(null);
    const [dongTooltip, setDongTooltip] = useState(null);
    const [quarters, setQuarters] = useState([]);
    const [selectedQtr, setSelectedQtr] = useState("");
-   const dongModeRef = useRef("none");
+   const dongModeRef = useRef("sales");
    const currentGuNmRef = useRef("");
 
    useEffect(() => {
@@ -149,9 +140,6 @@ export default function MapView() {
          })
          .catch(() => {});
    }, []);
-   useEffect(() => {
-      clickModeRef.current = clickMode;
-   }, [clickMode]);
 
    const allCatKeys = new Set(CATEGORIES.map((c) => c.key));
    const [visibleCats, setVisibleCats] = useState(allCatKeys);
@@ -160,34 +148,22 @@ export default function MapView() {
    const [svcData, setSvcData] = useState([]);
    const [selectedSvc, setSelectedSvc] = useState(""); // 업종 필터 선택값
 
-   const { allStoresRef, drawCircle, drawMarkers, clearMarkers, selectMarker } =
-      useMarkers(mapInstance, visibleCats);
-
-   const { loadPopulation, setPopVisible: _setPopVis } =
-      usePopulationLayer(mapInstance);
+   const { allStoresRef, drawMarkers, clearMarkers, selectMarker } = useMarkers(
+      mapInstance,
+      visibleCats,
+   );
 
    const {
       landmarkLayerRef,
       festivalLayerRef,
       schoolLayerRef,
-      sdotLayerRef,
       loadLandmarks,
       loadFestivals,
       loadSchools,
-      loadSdot,
       selectLandmark,
    } = useLandmarkLayer(mapInstance);
 
    // ── 초기 랜드마크·학교·유동인구 전체 로드 (지도 준비 후 1회) ──
-   const landmarkInitRef = useRef(false);
-   useEffect(() => {
-      if (!mapInstance.current || landmarkInitRef.current) return;
-      landmarkInitRef.current = true;
-      loadLandmarks().then(() => setLandmarkLoaded(true));
-      loadSchools().then(() => setSchoolLoaded(true));
-      loadSdot().then(() => setSdotLoaded(true));
-      loadPopulation().then((n) => setPopCount(n || 0));
-   }, [mapInstance.current]); // eslint-disable-line
    const {
       dongBoundaryLayerRef,
       dongHoverFeatRef,
@@ -195,6 +171,16 @@ export default function MapView() {
       ensureDongBoundaryLayer,
       resetDongLayer,
    } = useDongLayer(mapInstance);
+
+   const landmarkInitRef = useRef(false);
+   useEffect(() => {
+      if (!mapInstance.current || landmarkInitRef.current) return;
+      landmarkInitRef.current = true;
+      loadLandmarks().then(() => setLandmarkLoaded(true));
+      loadSchools().then(() => setSchoolLoaded(true));
+      // 기본 폴리곤 활성화 (dongMode 기본값 sales라서 경계 표시)
+      ensureDongBoundaryLayer();
+   }, [mapInstance.current]); // eslint-disable-line
    const dongSelectedFeatRef = useRef(null); // 현재 선택(클릭)된 폴리곤
    const dongSearchFeatsRef = useRef([]); // 검색으로 하이라이트된 폴리곤 목록
 
@@ -264,6 +250,8 @@ export default function MapView() {
       setWmsPopup(null);
       setDongPanel(null);
       setCatCounts({});
+      setDongMode("none");
+      resetDongLayer();
    };
 
    // ── 구/동 검색 → 폴리곤 하이라이트 ────────────────────────────
@@ -354,7 +342,6 @@ export default function MapView() {
                counts[key] = (counts[key] || 0) + 1;
             });
             setCatCounts(counts);
-            drawCircle(lng, lat, radius);
             drawMarkers(stores, visibleCatsRef.current);
          })
          .catch(() => {})
@@ -371,6 +358,9 @@ export default function MapView() {
          setDongTooltip(null);
          dongSelectedFeatRef.current = null;
          dongSearchFeatsRef.current = [];
+         // 동 모드 해제 시 스토어 마커 제거
+         clearMarkers();
+         setNearbyCount(null);
       } else {
          await ensureDongBoundaryLayer();
          // ── 3번: 선택된 폴리곤 있으면 모드 전환 시 자동 재조회 ──
@@ -473,7 +463,6 @@ export default function MapView() {
          const [lng, lat] = toLonLat(e.coordinate);
          setCoords({ lat: lat.toFixed(6), lng: lng.toFixed(6) });
 
-         if (dongModeRef.current === "none") return;
          const bLayer = dongBoundaryLayerRef.current;
          if (!bLayer?.getSource?.()?.getFeatures) return;
 
@@ -519,7 +508,6 @@ export default function MapView() {
                });
                clearTimeout(moveHandler._t);
                moveHandler._t = setTimeout(async () => {
-                  if (dongModeRef.current === "none") return;
                   try {
                      const _admCd = feat.getProperties().adm_cd || "";
                      if (!_admCd) {
@@ -572,7 +560,7 @@ export default function MapView() {
       };
 
       const clickHandler = async (e) => {
-         if (dongModeRef.current !== "none") {
+         {
             const bLayer = dongBoundaryLayerRef.current;
             const feat = bLayer?.getSource?.()?.getFeatures
                ? map.forEachFeatureAtPixel(e.pixel, (f) => f, {
@@ -581,7 +569,7 @@ export default function MapView() {
                  })
                : null;
 
-            if (feat) {
+            if (feat && dongModeRef.current !== "none") {
                const p = feat.getProperties();
                const _emdCd = (p.adm_cd || "").trim();
                const _admCd = (p.adm_cd || "").trim();
@@ -619,6 +607,26 @@ export default function MapView() {
                   setDongPanel(null);
 
                   const _mode = dongModeRef.current;
+                  // 모든 모드에서 폴리곤 클릭 시 스토어 자동 검색
+                  if (_admCd) {
+                     fetch(
+                        `${FASTAPI_URL}/map/stores-by-dong?adm_cd=${_admCd}&limit=9999`,
+                     )
+                        .then((r) => r.json())
+                        .then((d) => {
+                           const stores = d.stores || [];
+                           allStoresRef.current = stores;
+                           setNearbyCount(stores.length);
+                           const counts = {};
+                           stores.forEach((s) => {
+                              counts[s.CAT_CD || "기타"] =
+                                 (counts[s.CAT_CD || "기타"] || 0) + 1;
+                           });
+                           setCatCounts(counts);
+                           drawMarkers(stores, visibleCatsRef.current);
+                        })
+                        .catch(() => {});
+                  }
                   try {
                      if (_mode === "store") {
                         const rr = await fetch(
@@ -635,6 +643,26 @@ export default function MapView() {
                               apiData: jj,
                            });
                      } else if (_mode === "sales") {
+                        // 폴리곤 내 스토어 클러스터 표시
+                        if (_admCd) {
+                           fetch(
+                              `${FASTAPI_URL}/map/stores-by-dong?adm_cd=${_admCd}`,
+                           )
+                              .then((r) => r.json())
+                              .then((d) => {
+                                 const stores = d.stores || [];
+                                 allStoresRef.current = stores;
+                                 setNearbyCount(stores.length);
+                                 const counts = {};
+                                 stores.forEach((s) => {
+                                    counts[s.CAT_CD || "기타"] =
+                                       (counts[s.CAT_CD || "기타"] || 0) + 1;
+                                 });
+                                 setCatCounts(counts);
+                                 drawMarkers(stores, visibleCatsRef.current);
+                              })
+                              .catch(() => {});
+                        }
                         const qtrParam = selectedQtr
                            ? `&quarter=${encodeURIComponent(selectedQtr)}`
                            : "";
@@ -662,7 +690,6 @@ export default function MapView() {
                               apiData: null,
                               empty: true,
                            });
-                        // 업종별 매출 조회
                         if (_admCd) {
                            fetch(
                               `${REALESTATE_URL}/realestate/sangkwon-svc?adm_cd=${encodeURIComponent(_admCd)}${qtrParam}`,
@@ -707,14 +734,9 @@ export default function MapView() {
          }
          setWmsPopup(null);
 
-         // 로드뷰 모드: 클릭 좌표로 로드뷰 열기
-         if (roadviewMode) {
-            const [lng, lat] = toLonLat(e.coordinate);
-            setRoadviewPos({ lat, lng });
-            return;
-         }
-
-         const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f);
+         const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f, {
+            hitTolerance: 6,
+         });
 
          // 랜드마크/학교 마커 클릭
          if (feature?.get("lmData")) {
@@ -723,35 +745,37 @@ export default function MapView() {
             setLandmarkPopup(lmData);
             setPopup(null);
             setKakaoDetail(null);
-            setLmKakao(null);
-            setLmKakaoLoading(true);
-            fetchKakaoDetail(
-               lmData.title || lmData.school_nm,
-               lmData.addr || lmData.road_addr,
-            ).then((d) => {
-               setLmKakao(d);
-               setLmKakaoLoading(false);
-            });
+
             return;
          }
-         if (feature?.get("store")) {
-            const store = feature.get("store");
-            selectMarker(feature);
+         // 클러스터 처리
+         const clusterMembers = feature?.get("features");
+         if (clusterMembers?.length > 1) {
+            const stores = clusterMembers
+               .map((f) => f.get("store"))
+               .filter(Boolean);
+            setClusterPopup({ stores, x: e.pixel[0], y: e.pixel[1] });
+            return;
+         }
+         // 단일 마커 (클러스터 내 1개 or 일반 마커)
+         const realFeat =
+            clusterMembers?.length === 1 ? clusterMembers[0] : feature;
+         if (realFeat?.get("store")) {
+            const store = realFeat.get("store");
+            selectMarker(realFeat);
             setLandmarkPopup(null);
             selectLandmark(null);
             setPopup(store);
             setKakaoDetail(null);
             setLoadingDetail(true);
             const detail = await fetchKakaoDetail(
-               store.상호명,
-               store.도로명주소,
+               store.STORE_NM || store.상호명,
+               store.ROAD_ADDR || store.도로명주소,
             );
             setKakaoDetail(detail);
             setLoadingDetail(false);
             return;
          }
-
-         if (!clickModeRef.current) return;
 
          const [lng, lat] = toLonLat(e.coordinate);
          const zoom = map.getView().getZoom() ?? 14;
@@ -775,7 +799,6 @@ export default function MapView() {
                counts[key] = (counts[key] || 0) + 1;
             });
             setCatCounts(counts);
-            drawCircle(lng, lat, radius);
             drawMarkers(stores, visibleCatsRef.current); // ref로 최신값 보장
          } catch (err) {
             console.error("DB 조회 오류:", err);
@@ -809,8 +832,6 @@ export default function MapView() {
          />
          <div ref={mapRef} className="mv-map" />
          <MapControls
-            clickMode={clickMode}
-            setClickMode={setClickMode}
             nearbyCount={nearbyCount}
             loading={loading}
             onClear={clearAll}
@@ -818,9 +839,29 @@ export default function MapView() {
             onDongMode={handleDongMode}
             dongLoading={dongLoading}
             currentGuNm={currentGuNmRef.current}
-            roadviewMode={roadviewMode}
-            onRoadviewToggle={() => setRoadviewMode((v) => !v)}
-            onPopPanel={() => setShowPopPanel((v) => !v)}
+            onStoreSearch={() => {
+               const feat = dongSelectedFeatRef.current;
+               if (!feat) return;
+               const admCd = feat.getProperties().adm_cd;
+               if (!admCd) return;
+               fetch(
+                  `${FASTAPI_URL}/map/stores-by-dong?adm_cd=${admCd}&limit=9999`,
+               )
+                  .then((r) => r.json())
+                  .then((d) => {
+                     const stores = d.stores || [];
+                     allStoresRef.current = stores;
+                     setNearbyCount(stores.length);
+                     const counts = {};
+                     stores.forEach((s) => {
+                        counts[s.CAT_CD || "기타"] =
+                           (counts[s.CAT_CD || "기타"] || 0) + 1;
+                     });
+                     setCatCounts(counts);
+                     drawMarkers(stores, visibleCatsRef.current);
+                  })
+                  .catch(() => {});
+            }}
          />
          <button
             className="mv-layer-btn"
@@ -838,11 +879,9 @@ export default function MapView() {
                   landmarkLayerRef={landmarkLayerRef}
                   festivalLayerRef={festivalLayerRef}
                   schoolLayerRef={schoolLayerRef}
-                  sdotLayerRef={sdotLayerRef}
                   landmarkLoaded={landmarkLoaded}
                   festivalLoaded={festivalLoaded}
                   schoolLoaded={schoolLoaded}
-                  sdotLoaded={sdotLoaded}
                />
             </div>
          )}
@@ -851,10 +890,120 @@ export default function MapView() {
             landValue={landValue}
             onClose={() => setWmsPopup(null)}
          />
+         {/* 클러스터 팝업 */}
+         {clusterPopup && (
+            <div
+               style={{
+                  position: "absolute",
+                  left: Math.min(clusterPopup.x + 10, window.innerWidth - 260),
+                  top: Math.max(clusterPopup.y - 10, 60),
+                  zIndex: 400,
+                  width: 240,
+                  background: "#fff",
+                  borderRadius: 12,
+                  boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
+                  overflow: "hidden",
+                  maxHeight: 320,
+               }}
+            >
+               <div
+                  style={{
+                     padding: "10px 14px 6px",
+                     display: "flex",
+                     justifyContent: "space-between",
+                     alignItems: "center",
+                     borderBottom: "1px solid #f0f0f0",
+                  }}
+               >
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>
+                     🏪 상가 {clusterPopup.stores.length}개
+                  </span>
+                  <button
+                     onClick={() => setClusterPopup(null)}
+                     style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        color: "#bbb",
+                        fontSize: 15,
+                     }}
+                  >
+                     ✕
+                  </button>
+               </div>
+               <div style={{ overflowY: "auto", maxHeight: 260 }}>
+                  {clusterPopup.stores.map((s, i) => (
+                     <div
+                        key={s.STORE_ID || i}
+                        onClick={() => {
+                           setClusterPopup(null);
+                           setPopup(s);
+                           setKakaoDetail(null);
+                           setLoadingDetail(true);
+                           fetchKakaoDetail(s.STORE_NM, s.ROAD_ADDR).then(
+                              (d) => {
+                                 setKakaoDetail(d);
+                                 setLoadingDetail(false);
+                              },
+                           );
+                        }}
+                        style={{
+                           padding: "8px 14px",
+                           cursor: "pointer",
+                           borderBottom: "1px solid #f5f5f5",
+                           display: "flex",
+                           alignItems: "center",
+                           gap: 8,
+                        }}
+                     >
+                        <div
+                           style={{
+                              width: 8,
+                              height: 8,
+                              borderRadius: "50%",
+                              background: "#0891B2",
+                              flexShrink: 0,
+                           }}
+                        />
+                        <div>
+                           <div
+                              style={{
+                                 fontSize: 12,
+                                 fontWeight: 600,
+                                 color: "#222",
+                              }}
+                           >
+                              {s.STORE_NM}
+                           </div>
+                           <div style={{ fontSize: 10, color: "#aaa" }}>
+                              {s.CAT_NM}
+                           </div>
+                        </div>
+                     </div>
+                  ))}
+               </div>
+            </div>
+         )}
          <StorePopup
             popup={popup}
             kakaoDetail={kakaoDetail}
             loadingDetail={loadingDetail}
+            nearbyStores={
+               popup
+                  ? allStoresRef.current.filter(
+                       (s) => s.STORE_ID !== popup.STORE_ID,
+                    )
+                  : []
+            }
+            onStoreSelect={(s) => {
+               setPopup(s);
+               setKakaoDetail(null);
+               setLoadingDetail(true);
+               fetchKakaoDetail(s.STORE_NM, s.ROAD_ADDR).then((d) => {
+                  setKakaoDetail(d);
+                  setLoadingDetail(false);
+               });
+            }}
             onClose={() => {
                setPopup(null);
                setKakaoDetail(null);
@@ -876,35 +1025,10 @@ export default function MapView() {
                setDongPanel(null);
             }}
          />
-         {showPopPanel && (
-            <PopulationPanel
-               onClose={() => setShowPopPanel(false)}
-               visible={popVisible}
-               onToggle={() => {
-                  const next = !popVisible;
-                  setPopVisible(next);
-                  _setPopVis(next);
-               }}
-               count={popCount}
-            />
-         )}
-         {roadviewPos && (
-            <RoadviewPanel
-               lat={roadviewPos.lat}
-               lng={roadviewPos.lng}
-               onClose={() => {
-                  setRoadviewPos(null);
-                  setRoadviewMode(false);
-               }}
-            />
-         )}
          <LandmarkPopup
             popup={landmarkPopup}
-            kakaoDetail={lmKakao}
-            loadingDetail={lmKakaoLoading}
             onClose={() => {
                setLandmarkPopup(null);
-               setLmKakao(null);
                selectLandmark(null);
             }}
          />
