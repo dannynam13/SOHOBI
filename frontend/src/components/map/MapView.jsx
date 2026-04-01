@@ -69,7 +69,7 @@ function getRadiusAndLimit(zoom) {
 // ── 메인 컴포넌트 ──────────────────────────────────────────────
 export default function MapView() {
    const mapRef = useRef(null);
-   const mapInstance = useMap(mapRef);
+   const { mapInstance, mapReady } = useMap(mapRef);
    const wmsLayerRef = useRef(null);
 
    const [coords, setCoords] = useState({ lat: "37.5665", lng: "126.9780" });
@@ -148,10 +148,13 @@ export default function MapView() {
    const [svcData, setSvcData] = useState([]);
    const [selectedSvc, setSelectedSvc] = useState(""); // 업종 필터 선택값
 
-   const { allStoresRef, drawMarkers, clearMarkers, selectMarker } = useMarkers(
-      mapInstance,
-      visibleCats,
-   );
+   const {
+      allStoresRef,
+      drawMarkers,
+      clearMarkers,
+      selectMarker,
+      markerLayerRef,
+   } = useMarkers(mapInstance, visibleCats);
 
    const {
       landmarkLayerRef,
@@ -174,13 +177,13 @@ export default function MapView() {
 
    const landmarkInitRef = useRef(false);
    useEffect(() => {
-      if (!mapInstance.current || landmarkInitRef.current) return;
+      if (!mapReady || !mapInstance.current || landmarkInitRef.current) return;
       landmarkInitRef.current = true;
       loadLandmarks().then(() => setLandmarkLoaded(true));
       loadSchools().then(() => setSchoolLoaded(true));
       // 기본 폴리곤 활성화 (dongMode 기본값 sales라서 경계 표시)
       ensureDongBoundaryLayer();
-   }, [mapInstance.current]); // eslint-disable-line
+   }, [mapReady]); // eslint-disable-line
    const dongSelectedFeatRef = useRef(null); // 현재 선택(클릭)된 폴리곤
    const dongSearchFeatsRef = useRef([]); // 검색으로 하이라이트된 폴리곤 목록
 
@@ -358,11 +361,11 @@ export default function MapView() {
          setDongTooltip(null);
          dongSelectedFeatRef.current = null;
          dongSearchFeatsRef.current = [];
-         // 동 모드 해제 시 스토어 마커 제거
          clearMarkers();
          setNearbyCount(null);
       } else {
          await ensureDongBoundaryLayer();
+         // 마커는 유지 (폴리곤 클릭 시에만 갱신)
          // ── 3번: 선택된 폴리곤 있으면 모드 전환 시 자동 재조회 ──
          const selFeat = dongSelectedFeatRef.current;
          if (selFeat) {
@@ -646,7 +649,7 @@ export default function MapView() {
                         // 폴리곤 내 스토어 클러스터 표시
                         if (_admCd) {
                            fetch(
-                              `${FASTAPI_URL}/map/stores-by-dong?adm_cd=${_admCd}`,
+                              `${FASTAPI_URL}/map/stores-by-dong?adm_cd=${_admCd}&limit=9999`,
                            )
                               .then((r) => r.json())
                               .then((d) => {
@@ -733,6 +736,41 @@ export default function MapView() {
             return;
          }
          setWmsPopup(null);
+
+         // 클러스터 레이어 우선 체크
+         const clusterFeature = map.forEachFeatureAtPixel(e.pixel, (f) => f, {
+            hitTolerance: 10,
+            layerFilter: (l) =>
+               l ===
+               (typeof markerLayerRef !== "undefined"
+                  ? markerLayerRef.current
+                  : null),
+         });
+         const clusterMembersEarly = clusterFeature?.get("features");
+         if (clusterMembersEarly?.length > 0) {
+            if (clusterMembersEarly.length > 1) {
+               const stores = clusterMembersEarly
+                  .map((f) => f.get("store"))
+                  .filter(Boolean);
+               setClusterPopup({ stores, x: e.pixel[0], y: e.pixel[1] });
+               return;
+            } else {
+               const store = clusterMembersEarly[0].get("store");
+               if (store) {
+                  setClusterPopup(null);
+                  setPopup(store);
+                  setKakaoDetail(null);
+                  setLoadingDetail(true);
+                  fetchKakaoDetail(store.STORE_NM, store.ROAD_ADDR).then(
+                     (d) => {
+                        setKakaoDetail(d);
+                        setLoadingDetail(false);
+                     },
+                  );
+                  return;
+               }
+            }
+         }
 
          const feature = map.forEachFeatureAtPixel(e.pixel, (f) => f, {
             hitTolerance: 6,
@@ -891,99 +929,6 @@ export default function MapView() {
             onClose={() => setWmsPopup(null)}
          />
          {/* 클러스터 팝업 */}
-         {clusterPopup && (
-            <div
-               style={{
-                  position: "absolute",
-                  left: Math.min(clusterPopup.x + 10, window.innerWidth - 260),
-                  top: Math.max(clusterPopup.y - 10, 60),
-                  zIndex: 400,
-                  width: 240,
-                  background: "#fff",
-                  borderRadius: 12,
-                  boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
-                  overflow: "hidden",
-                  maxHeight: 320,
-               }}
-            >
-               <div
-                  style={{
-                     padding: "10px 14px 6px",
-                     display: "flex",
-                     justifyContent: "space-between",
-                     alignItems: "center",
-                     borderBottom: "1px solid #f0f0f0",
-                  }}
-               >
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>
-                     🏪 상가 {clusterPopup.stores.length}개
-                  </span>
-                  <button
-                     onClick={() => setClusterPopup(null)}
-                     style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        color: "#bbb",
-                        fontSize: 15,
-                     }}
-                  >
-                     ✕
-                  </button>
-               </div>
-               <div style={{ overflowY: "auto", maxHeight: 260 }}>
-                  {clusterPopup.stores.map((s, i) => (
-                     <div
-                        key={s.STORE_ID || i}
-                        onClick={() => {
-                           setClusterPopup(null);
-                           setPopup(s);
-                           setKakaoDetail(null);
-                           setLoadingDetail(true);
-                           fetchKakaoDetail(s.STORE_NM, s.ROAD_ADDR).then(
-                              (d) => {
-                                 setKakaoDetail(d);
-                                 setLoadingDetail(false);
-                              },
-                           );
-                        }}
-                        style={{
-                           padding: "8px 14px",
-                           cursor: "pointer",
-                           borderBottom: "1px solid #f5f5f5",
-                           display: "flex",
-                           alignItems: "center",
-                           gap: 8,
-                        }}
-                     >
-                        <div
-                           style={{
-                              width: 8,
-                              height: 8,
-                              borderRadius: "50%",
-                              background: "#0891B2",
-                              flexShrink: 0,
-                           }}
-                        />
-                        <div>
-                           <div
-                              style={{
-                                 fontSize: 12,
-                                 fontWeight: 600,
-                                 color: "#222",
-                              }}
-                           >
-                              {s.STORE_NM}
-                           </div>
-                           <div style={{ fontSize: 10, color: "#aaa" }}>
-                              {s.CAT_NM}
-                           </div>
-                        </div>
-                     </div>
-                  ))}
-               </div>
-            </div>
-         )}
          <StorePopup
             popup={popup}
             kakaoDetail={kakaoDetail}
@@ -1004,9 +949,21 @@ export default function MapView() {
                   setLoadingDetail(false);
                });
             }}
+            clusterStores={clusterPopup?.stores || null}
+            onClusterSelect={(s) => {
+               setClusterPopup(null);
+               setPopup(s);
+               setKakaoDetail(null);
+               setLoadingDetail(true);
+               fetchKakaoDetail(s.STORE_NM, s.ROAD_ADDR).then((d) => {
+                  setKakaoDetail(d);
+                  setLoadingDetail(false);
+               });
+            }}
             onClose={() => {
                setPopup(null);
                setKakaoDetail(null);
+               setClusterPopup(null);
             }}
          />
          <DongTooltip tooltip={dongTooltip} mode={dongMode} />
