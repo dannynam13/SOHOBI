@@ -93,7 +93,11 @@ class AdminAgent:
         prior_history: list[dict] | None = None,
         context: dict | None = None,
     ) -> str:
-        service: AzureChatCompletion = self._kernel.get_service("sign_off")
+        # gpt-4o (admin_llm) 우선, 없으면 기본 서비스 fallback
+        try:
+            service: AzureChatCompletion = self._kernel.get_service("admin_llm")
+        except Exception:
+            service: AzureChatCompletion = self._kernel.get_service("sign_off")
 
         ctx = context or {}
         context_note = ""
