@@ -4,9 +4,10 @@
 """
 
 import math
-import os
 import random
 from semantic_kernel.functions import kernel_function
+
+from integrated_PARK.db.repository import INDUSTRY_CODE_MAP
 
 try:
     from db.finance_db import DBWork
@@ -195,13 +196,14 @@ class FinanceSimulationPlugin:
 
     def load_initial(self, region: str = None, industry: str = None) -> dict:
         """지역/업종 코드를 받아 매출 데이터를 불러옵니다."""
+        industry_cd = INDUSTRY_CODE_MAP.get(industry, "")
         if _DBWORK_AVAILABLE:
             try:
                 dbwork = DBWork()
-                if region is None and industry is None:
+                if region is None and industry_cd is None:
                     revenue = dbwork.get_average_sales()
                 else:
-                    revenue = dbwork.get_sales(region, industry)
+                    revenue = dbwork.get_sales(region, industry_cd)
             except Exception:
                 revenue = [14000000]
         else:
