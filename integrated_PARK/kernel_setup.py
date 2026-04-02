@@ -30,9 +30,11 @@ def get_kernel() -> sk.Kernel:
 
 
 def get_signoff_client() -> openai.AsyncAzureOpenAI:
+    api_key = os.getenv("AZURE_OPENAI_API_KEY")
     return openai.AsyncAzureOpenAI(
         azure_endpoint=os.getenv("AZURE_SIGNOFF_ENDPOINT", os.getenv("AZURE_OPENAI_ENDPOINT")),
-        azure_ad_token_provider=_TOKEN_PROVIDER,
+        api_key=api_key if api_key else None,
+        azure_ad_token_provider=None if api_key else _TOKEN_PROVIDER,
         api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-05-01-preview"),
         timeout=220.0,
     )
