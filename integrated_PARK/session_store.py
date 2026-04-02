@@ -44,9 +44,13 @@ async def _get_container():
     db_name  = os.getenv("COSMOS_DATABASE", "sohobi")
     con_name = os.getenv("COSMOS_CONTAINER", "sessions")
 
-    # 키 인증이 비활성화된 계정이므로 AD 토큰 인증 사용
-    credential = DefaultAzureCredential()
-    client = CosmosClient(url=endpoint, credential=credential)
+    # 키 인증 우선, 없으면 AD 토큰 인증 사용
+    cosmos_key = os.getenv("COSMOS_KEY", "")
+    if cosmos_key:
+        client = CosmosClient(url=endpoint, credential=cosmos_key)
+    else:
+        credential = DefaultAzureCredential()
+        client = CosmosClient(url=endpoint, credential=credential)
     db     = client.get_database_client(db_name)
     _container = db.get_container_client(con_name)
     global _cosmos_client
