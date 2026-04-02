@@ -1,16 +1,20 @@
 """
-T-LA-01 ~ T-LA-17: LocationAgent / LocationPlugin 단위 테스트
+T-LA-01 ~ T-LA-19: LocationAgent / LocationPlugin 단위 테스트
 
 실행:
     cd integrated_PARK
     .venv/bin/python -m pytest tests/test_location_agent.py -v
 
-Azure LLM·Oracle DB 호출 없이 mock만 사용합니다.
+Azure LLM·PostgreSQL DB 호출 없이 mock만 사용합니다.
 
 발견된 버그:
   Bug-1 (T-LA-15): location_plugin.py → str 주석이지만 dict 반환 (SK 직렬화 오류)
   Bug-2 (T-LA-13): _call_llm content_filter 재시도 시 user_msg 누락
   Bug-3 (T-LA-09): analyze()에서 trdar_name 키 접근 → KeyError (올바른 키: adm_name)
+
+추가 이슈 수정:
+  Issue-4 (T-LA-18): psycopg2 동기 호출 이벤트 루프 블로킹 → asyncio.to_thread() 적용
+  Issue-5 (T-LA-19): _extract_params 정규식이 LLM 앞문장 처리 실패 → re.search() 적용
 """
 
 import json
@@ -511,3 +515,77 @@ class TestPlugin:
         assert isinstance(result, str)
         parsed = json.loads(result)
         assert "draft" in parsed
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# T-LA-18 ~ T-LA-19: Issue-4, Issue-5 추가 검증
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestAsyncioAndRegex:
+    """Issue-4(asyncio.to_thread) / Issue-5(정규식) 검증"""
+
+    @pytest.mark.asyncio
+    async def test_18_analyze_uses_asyncio_to_thread(self, fake_kernel, mock_repo):
+        """T-LA-18 [Issue-4]: analyze() DB 호출이 asyncio.to_thread()를 사용하는지 검증
+
+        Fix: psycopg2 동기 호출이 이벤트 루프를 블로킹하지 않도록 asyncio.to_thread() 래핑
+        """
+        import asyncio
+        from agents.location_agent import LocationAgent
+
+        with patch("agents.location_agent.CommercialRepository", return_value=mock_repo):
+            agent = LocationAgent(fake_kernel)
+
+        to_thread_funcs = []
+        original_to_thread = asyncio.to_thread
+
+        async def capturing_to_thread(func, *args, **kwargs):
+            to_thread_funcs.append(func)
+            return await original_to_thread(func, *args, **kwargs)
+
+        with patch("asyncio.to_thread", side_effect=capturing_to_thread):
+            await agent.analyze("홍대", "카페", "20244")
+
+        assert mock_repo.get_sales in to_thread_funcs, (
+            "Issue-4: get_sales가 asyncio.to_thread()를 통해 호출되어야 합니다. "
+            "직접 동기 호출하면 이벤트 루프가 블로킹됩니다."
+        )
+        assert mock_repo.get_store_count in to_thread_funcs, (
+            "Issue-4: get_store_count가 asyncio.to_thread()를 통해 호출되어야 합니다."
+        )
+        assert mock_repo.get_similar_locations in to_thread_funcs, (
+            "Issue-4: get_similar_locations가 asyncio.to_thread()를 통해 호출되어야 합니다."
+        )
+
+    @pytest.mark.asyncio
+    async def test_19_extract_params_preamble_text(self, fake_kernel, mock_repo):
+        """T-LA-19 [Issue-5]: LLM이 앞문장 + JSON 코드블록 형태로 반환할 때 정상 파싱
+
+        Bug: re.sub으로 코드펜스만 제거하면 앞문장이 남아 json.loads() 실패 → 폴백
+        Fix: re.search로 코드펜스 내부 JSON만 직접 추출
+        """
+        from agents.location_agent import LocationAgent
+
+        with patch("agents.location_agent.CommercialRepository", return_value=mock_repo):
+            agent = LocationAgent(fake_kernel)
+
+        # LLM이 설명 텍스트 + JSON 코드블록 형태로 반환
+        preamble_response = (
+            "아래는 요청하신 JSON입니다:\n"
+            "```json\n"
+            '{"mode": "analyze", "locations": ["홍대"], "business_type": "카페", "quarter": "20244"}\n'
+            "```"
+        )
+        fake_kernel.get_service.return_value.get_chat_message_content = AsyncMock(
+            return_value=MagicMock(__str__=lambda s: preamble_response)
+        )
+
+        params = await agent._extract_params("홍대 카페 분석")
+        # Issue-5 수정 검증: 앞문장이 있어도 JSON 정상 파싱
+        assert params["locations"] == ["홍대"], (
+            "Issue-5: LLM 앞문장이 있을 때 JSON 파싱에 실패하여 기본값으로 폴백됩니다. "
+            "_extract_params의 정규식을 re.search()로 수정해야 합니다."
+        )
+        assert params["business_type"] == "카페"
+        assert params["mode"] == "analyze"

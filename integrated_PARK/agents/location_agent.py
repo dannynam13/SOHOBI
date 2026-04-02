@@ -8,6 +8,7 @@
 - S1~S5 루브릭 통과용 지시 포함 (sign-off 루프 참여)
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -187,7 +188,8 @@ class LocationAgent:
             "You are a parameter extractor. Output JSON only.",
             history_ctx + _PARAM_EXTRACT_PROMPT.format(user_input=question),
         )
-        clean = re.sub(r"^```json\s*|\s*```$", "", raw.strip(), flags=re.MULTILINE)
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
+        clean = m.group(1) if m else raw.strip()
         try:
             params = json.loads(clean)
         except json.JSONDecodeError:
@@ -242,8 +244,10 @@ class LocationAgent:
                 "type": "analyze",
             }
 
-        sales_data = self._repo.get_sales(location, business_type, quarter)
-        store_data = self._repo.get_store_count(location, business_type, quarter)
+        sales_data, store_data = await asyncio.gather(
+            asyncio.to_thread(self._repo.get_sales, location, business_type, quarter),
+            asyncio.to_thread(self._repo.get_store_count, location, business_type, quarter),
+        )
 
         if not sales_data and not store_data:
             return {
@@ -272,14 +276,16 @@ class LocationAgent:
                 s_sales = float(s.get("monthly_sales_krw", 0))
                 s["avg_sales_per_store_krw"] = int(s_sales / s_count) if s_count > 0 else 0
 
-        analysis = await self._run_agent(location, business_type, quarter, sales_data, store_data)
-
-        # 유사 상권 추천 테이블 추가
-        similar = self._repo.get_similar_locations(
-            business_type=business_type,
-            quarter=quarter,
-            exclude_location=location,
-            top_n=3,
+        # _run_agent(LLM 호출)과 유사 상권 조회(동기 DB)를 병렬 실행
+        analysis, similar = await asyncio.gather(
+            self._run_agent(location, business_type, quarter, sales_data, store_data),
+            asyncio.to_thread(
+                self._repo.get_similar_locations,
+                business_type=business_type,
+                quarter=quarter,
+                exclude_location=location,
+                top_n=3,
+            ),
         )
         if similar:
             rows = "\n".join(
@@ -328,9 +334,14 @@ class LocationAgent:
         q = quarter[4]
 
         location_data = []
-        for loc in locations:
-            sales = self._repo.get_sales(loc, business_type, quarter)
-            store = self._repo.get_store_count(loc, business_type, quarter)
+        all_results = await asyncio.gather(*[
+            asyncio.gather(
+                asyncio.to_thread(self._repo.get_sales, loc, business_type, quarter),
+                asyncio.to_thread(self._repo.get_store_count, loc, business_type, quarter),
+            )
+            for loc in locations
+        ])
+        for loc, (sales, store) in zip(locations, all_results):
             if not sales and not store:
                 continue
 

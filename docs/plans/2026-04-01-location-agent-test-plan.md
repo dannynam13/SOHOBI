@@ -1,11 +1,12 @@
 # 상권분석 에이전트/플러그인 테스트 & 버그 수정
 
 **작성일**: 2026-04-01  
+**최종 업데이트**: 2026-04-02 (PostgreSQL 마이그레이션 반영, Issue-4·5 수정)  
 **대상 파일**: `integrated_PARK/agents/location_agent.py`, `integrated_PARK/plugins/location_plugin.py`
 
 ---
 
-## 발견된 버그 (총 3건)
+## 수정된 버그 / 이슈 (총 5건)
 
 ### Bug-1: `location_plugin.py` 반환 타입 불일치
 - **위치**: [location_plugin.py:49,70](../../integrated_PARK/plugins/location_plugin.py)
@@ -22,11 +23,23 @@
 - **증상**: `b["trdar_name"]` 접근 → repository breakdown의 실제 키는 `"adm_name"` → KeyError로 정상 분석 불가
 - **수정**: `"trdar_name"` → `"adm_name"` 으로 수정
 
+### Issue-4: psycopg2 동기 호출이 asyncio 이벤트 루프 블로킹 (PostgreSQL 마이그레이션 후 발생)
+- **위치**: [location_agent.py](../../integrated_PARK/agents/location_agent.py) — `analyze()`, `compare()`
+- **증상**: `psycopg2`는 synchronous-only 드라이버. FastAPI 이벤트 루프에서 직접 호출 시 DB I/O 동안 모든 요청 중단
+- **수정**: `asyncio.to_thread()` + `asyncio.gather()`로 병렬 비동기화
+  - `analyze()`: `get_sales` + `get_store_count` 병렬 실행, `_run_agent` + `get_similar_locations` 병렬 실행
+  - `compare()`: 전 지역 `get_sales` + `get_store_count`를 `asyncio.gather()`로 일괄 병렬 실행
+
+### Issue-5: `_extract_params` 정규식이 LLM 앞문장 처리 실패
+- **위치**: [location_agent.py:190](../../integrated_PARK/agents/location_agent.py)
+- **증상**: LLM이 "설명\n\`\`\`json\n{...}\n\`\`\`" 형태 반환 시 `re.sub`이 앞문장을 제거 못함 → `json.loads()` 실패 → 폴백 → "지역명과 업종을 명시해 주십시오" 오답
+- **수정**: `re.sub` → `re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)` 로 코드펜스 내부 JSON 직접 추출
+
 ---
 
 ## 테스트 파일
 
-**생성 파일**: `integrated_PARK/tests/test_location_agent.py` (17개 테스트)
+**생성 파일**: `integrated_PARK/tests/test_location_agent.py` (19개 테스트)
 
 | ID | 클래스 | 설명 |
 |----|--------|------|
@@ -47,6 +60,24 @@
 | T-LA-15 | TestPlugin | **Bug-1** 재현: analyze_commercial_area 반환값이 str인지 확인 |
 | T-LA-16 | TestPlugin | compare_commercial_areas 쉼표 파싱 |
 | T-LA-17 | TestPlugin | 쉼표+공백 구분자 처리 |
+| T-LA-18 | TestAsyncioAndRegex | **Issue-4** 재현: analyze() DB 호출이 asyncio.to_thread() 경유하는지 검증 |
+| T-LA-19 | TestAsyncioAndRegex | **Issue-5** 재현: LLM 앞문장+JSON 코드블록 정상 파싱 검증 |
+
+---
+
+## PostgreSQL 마이그레이션 영향
+
+main 브랜치 커밋 949d10a에서 DB가 Oracle → Azure PostgreSQL Flexible Server로 변경됨.
+
+| 항목 | Oracle (이전) | PostgreSQL (현재) |
+|------|--------------|------------------|
+| 드라이버 | `oracledb==2.5.0` | `psycopg2-binary==2.9.9` |
+| SQL 바인딩 | `:1, :2` | `%s, %s` |
+| 테이블명 | `SANGKWON_SALES` | `sangkwon_sales` |
+| 연결 해제 | 자동 | `_release(conn)` 명시 |
+
+**기존 테스트 영향**: 없음 — 모든 테스트가 `CommercialRepository`를 `MagicMock()`으로 대체.  
+단, `psycopg2-binary==2.9.9`가 venv에 설치되어 있어야 모듈 import가 성공함.
 
 ---
 
@@ -54,14 +85,17 @@
 
 ```bash
 cd integrated_PARK
-python3 -m pytest tests/test_location_agent.py -v
-# 17 passed (Azure LLM·Oracle DB 불필요, mock 기반)
+# psycopg2-binary 미설치 시 먼저 설치
+python -m pip install psycopg2-binary==2.9.9
+
+python -m pytest tests/test_location_agent.py -v
+# 19 passed (Azure LLM·PostgreSQL DB 불필요, mock 기반)
 ```
 
 ---
 
 ## 결과 요약
 
-- **수정 파일**: `agents/location_agent.py` (Bug-2, Bug-3), `plugins/location_plugin.py` (Bug-1)
+- **수정 파일**: `agents/location_agent.py` (Bug-2, Bug-3, Issue-4, Issue-5), `plugins/location_plugin.py` (Bug-1)
 - **신규 파일**: `tests/test_location_agent.py`
-- **테스트 결과**: 17/17 passed
+- **테스트 결과**: 19/19 passed
