@@ -589,3 +589,103 @@ class TestAsyncioAndRegex:
         )
         assert params["business_type"] == "카페"
         assert params["mode"] == "analyze"
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# T-LA-20 ~ T-LA-22: generate_draft / compare 엣지케이스 추가 검증
+# ────────────────────────────────────────────────────────────────────────────
+
+
+class TestEdgeCases:
+    """추가 발견 이슈 검증"""
+
+    @pytest.mark.asyncio
+    async def test_20_compare_unsupported_industry(self, fake_kernel, mock_repo):
+        """T-LA-20: compare() 미지원 업종 → 안내 메시지 반환 (DB 호출 없음)
+
+        T-LA-07의 analyze() 대응 케이스 — compare()도 동일 early-return 경로 보유
+        """
+        from agents.location_agent import LocationAgent
+
+        with patch("agents.location_agent.CommercialRepository", return_value=mock_repo):
+            agent = LocationAgent(fake_kernel)
+
+        result = await agent.compare(["홍대", "강남"], "피자", "20244")
+        assert "피자" in result["draft"]
+        assert result["adm_codes"] == []
+        assert result["type"] == "compare"
+        mock_repo.get_sales.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_21_generate_draft_retry_calls_llm_extra(self, fake_kernel, mock_repo):
+        """T-LA-21: retry_prompt 있을 때 LLM 호출이 1회 추가되는지 검증
+
+        흐름: _extract_params(1회) → _run_agent(1회) → retry(1회) = 총 3회
+        retry_prompt 없을 때: _extract_params(1회) → _run_agent(1회) = 총 2회
+        """
+        from agents.location_agent import LocationAgent
+
+        params_json = json.dumps(
+            {"mode": "analyze", "locations": ["홍대"], "business_type": "카페", "quarter": "20244"},
+            ensure_ascii=False,
+        )
+        r_params = MagicMock()
+        r_params.__str__ = lambda self: params_json
+        r_analysis = MagicMock()
+        r_analysis.__str__ = lambda self: "1차 분석 결과입니다."
+        r_retry = MagicMock()
+        r_retry.__str__ = lambda self: "재시도 분석 결과입니다."
+
+        fake_kernel.get_service.return_value.get_chat_message_content = AsyncMock(
+            side_effect=[r_params, r_analysis, r_retry]
+        )
+
+        with patch("agents.location_agent.CommercialRepository", return_value=mock_repo):
+            agent = LocationAgent(fake_kernel)
+
+        result = await agent.generate_draft(
+            "홍대 카페 분석해줘",
+            retry_prompt="800자 이내로 작성하십시오.",
+        )
+
+        call_count = fake_kernel.get_service.return_value.get_chat_message_content.call_count
+        assert call_count == 3, (
+            f"retry_prompt 있을 때 LLM 호출이 3회여야 합니다. 실제: {call_count}회"
+        )
+        assert result["draft"] == "재시도 분석 결과입니다."
+
+    @pytest.mark.asyncio
+    async def test_22_generate_draft_llm_failure_returns_guidance(self, fake_kernel, mock_repo):
+        """T-LA-22: _run_agent LLM 실패 시 ValueError가 전파되지 않고 안내 메시지 반환
+
+        수정 전: ValueError가 generate_draft() 밖으로 전파 → FastAPI 500 오류
+        수정 후: try/except로 잡아 "분석 중 오류" 안내 메시지 반환
+        """
+        from agents.location_agent import LocationAgent
+
+        params_json = json.dumps(
+            {"mode": "analyze", "locations": ["홍대"], "business_type": "카페", "quarter": "20244"},
+            ensure_ascii=False,
+        )
+        call_count = 0
+
+        async def selective_fail(history, settings=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:  # _extract_params 성공
+                r = MagicMock()
+                r.__str__ = lambda self: params_json
+                return r
+            raise ValueError("LLM이 빈 응답을 반환했습니다.")  # _run_agent 실패
+
+        fake_kernel.get_service.return_value.get_chat_message_content = selective_fail
+
+        with patch("agents.location_agent.CommercialRepository", return_value=mock_repo):
+            agent = LocationAgent(fake_kernel)
+
+        # ValueError가 전파되지 않고 dict 반환되어야 함
+        result = await agent.generate_draft("홍대 카페 분석해줘")
+        assert isinstance(result, dict), "ValueError가 전파되면 dict 반환 불가"
+        assert "오류" in result["draft"] or "다시 시도" in result["draft"], (
+            "LLM 실패 시 사용자 안내 메시지가 draft에 포함되어야 합니다."
+        )

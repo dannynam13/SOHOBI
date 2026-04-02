@@ -412,10 +412,20 @@ class LocationAgent:
             }
 
         # draft 생성
-        if mode == "compare" and len(locations) >= 2:
-            result = await self.compare(locations, business_type, quarter)
-        else:
-            result = await self.analyze(locations[0], business_type, quarter)
+        try:
+            if mode == "compare" and len(locations) >= 2:
+                result = await self.compare(locations, business_type, quarter)
+            else:
+                result = await self.analyze(locations[0], business_type, quarter)
+        except (ValueError, RuntimeError) as e:
+            logger.error("LocationAgent draft 생성 실패: %s", e)
+            return {
+                "draft": "분석 중 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.",
+                "adm_codes": [],
+                "type": mode,
+                "business_type": business_type,
+                "location_name": locations[0] if locations else "",
+            }
 
         draft = result["draft"]
         adm_codes = result["adm_codes"]
