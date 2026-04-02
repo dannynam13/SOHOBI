@@ -40,18 +40,22 @@ function makeMarkerStyle(category, selected = false) {
 }
 
 // 클러스터 스타일
-function makeClusterStyle(size, color) {
+function makeClusterStyle(size, color, selected = false) {
    const radius = size < 5 ? 10 : size < 20 ? 13 : size < 100 ? 16 : 20;
+   const r = selected ? radius + 4 : radius;
    return new Style({
       image: new CircleStyle({
-         radius,
-         fill: new Fill({ color }),
-         stroke: new Stroke({ color: "#fff", width: 2 }),
+         radius: r,
+         fill: new Fill({ color: selected ? "#fff" : color }),
+         stroke: new Stroke({
+            color: selected ? color : "#fff",
+            width: selected ? 3 : 2,
+         }),
       }),
       text: new Text({
          text: String(size),
-         fill: new Fill({ color: "#fff" }),
-         font: `bold ${radius}px sans-serif`,
+         fill: new Fill({ color: selected ? color : "#fff" }),
+         font: `bold ${r}px sans-serif`,
       }),
    });
 }
@@ -134,16 +138,59 @@ export function useMarkers(mapInstance, visibleCats) {
    };
 
    const selectMarker = (feature) => {
+      // 이전 선택 해제
       if (selectedFeatRef.current) {
          const prev = selectedFeatRef.current;
-         prev.setStyle(makeMarkerStyle(prev.get("store")?.CAT_CD));
+         const prevMembers = prev.get("features");
+         if (prevMembers?.length > 1) {
+            // 클러스터 이전 선택 해제
+            const cats = prevMembers
+               .map((f) => f.get("store")?.CAT_CD)
+               .filter(Boolean);
+            const topCat = cats.sort(
+               (a, b) =>
+                  cats.filter((c) => c === b).length -
+                  cats.filter((c) => c === a).length,
+            )[0];
+            prev.setStyle(
+               makeClusterStyle(
+                  prevMembers.length,
+                  CAT_COLORS[topCat] || "#888",
+               ),
+            );
+         } else {
+            prev.setStyle(makeMarkerStyle(prev.get("store")?.CAT_CD));
+         }
       }
       if (!feature) {
          selectedFeatRef.current = null;
          return;
       }
-      const store = feature.get("store");
-      feature.setStyle(makeMarkerStyle(store?.CAT_CD, true));
+
+      const members = feature.get("features");
+      if (members?.length > 1) {
+         // 클러스터 하이라이트
+         const cats = members
+            .map((f) => f.get("store")?.CAT_CD)
+            .filter(Boolean);
+         const topCat = cats.sort(
+            (a, b) =>
+               cats.filter((c) => c === b).length -
+               cats.filter((c) => c === a).length,
+         )[0];
+         feature.setStyle(
+            makeClusterStyle(
+               members.length,
+               CAT_COLORS[topCat] || "#888",
+               true,
+            ),
+         );
+      } else {
+         const store = (members?.length === 1 ? members[0] : feature).get(
+            "store",
+         );
+         feature.setStyle(makeMarkerStyle(store?.CAT_CD, true));
+      }
       selectedFeatRef.current = feature;
    };
 

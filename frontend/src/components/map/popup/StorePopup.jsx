@@ -180,7 +180,7 @@ function StoreDetailView({
                      border: `1px solid ${cat.color}`,
                   }}
                >
-                  {cat.label || popup.CAT_NM}
+                  {popup.MID_CAT_NM || cat.label || popup.CAT_NM}
                </div>
             </div>
             <button
